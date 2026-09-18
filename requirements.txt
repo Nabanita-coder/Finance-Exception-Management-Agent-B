@@ -1,0 +1,19 @@
+# --- Web framework ---
+Flask==3.0.3
+flask-cors==4.0.1
+
+# --- Database ---
+SQLAlchemy==2.0.35
+PyMySQL==1.1.1
+cryptography==43.0.1
+
+# --- Config ---
+python-dotenv==1.0.1
+
+# --- RAG (Retrieval Augmented Generation) chatbot ---
+chromadb>=0.5.23
+anthropic==0.34.2
+flask
+sqlalchemy
+pymysql
+python-dotenv
