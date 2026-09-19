@@ -1,10 +1,10 @@
 from flask import request, jsonify
-
+from dbConnection.db import call_sp
 from services import finance_service
 
 
 def health_check():
-    """Simple check to confirm the API is alive. Useful for testing setup."""
+    """Simple check to confirm the API is alive."""
     return jsonify({"status": "ok", "message": "FEMA API is running"}), 200
 
 
@@ -13,15 +13,7 @@ def health_check():
 # =====================================================================
 def create_financial_record():
     """
-    Adds a new Budget vs Actual entry.
-    Expected JSON body:
-    {
-        "category": "Revenue",
-        "period": "2026-09",
-        "department": "Sales",
-        "budget_amount": 1000000,
-        "actual_amount": 600000
-    }
+    POST: Adds a new Budget vs Actual entry via Stored Procedure 'sp_add_financial_record'.
     """
     data = request.get_json(force=True, silent=True) or {}
     required_fields = ["category", "period", "budget_amount", "actual_amount"]
@@ -30,28 +22,39 @@ def create_financial_record():
         return jsonify({"error": f"Missing required fields: {missing}"}), 400
 
     try:
-        record = finance_service.add_financial_record(data)
+        category = data["category"]
+        period = data["period"]
+        department = data.get("department")
+        budget_amount = float(data["budget_amount"])
+        actual_amount = float(data["actual_amount"])
+
+        rows = call_sp(
+            "sp_add_financial_record",
+            [category, period, department, budget_amount, actual_amount],
+        )
+        record = rows[0] if rows else {}
         return jsonify(record), 201
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 def list_financial_records():
-    """Returns every financial record stored in MySQL."""
+    """
+    GET: Returns all financial records via Stored Procedure 'sp_get_all_financial_records'.
+    """
     try:
-        records = finance_service.get_all_financial_records()
-        return jsonify(records), 200
+        rows = call_sp("sp_get_all_financial_records")
+        return jsonify(rows), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 # =====================================================================
-# MONITORING (runs the detection workflow)
+# MONITORING (AI Detection Workflow)
 # =====================================================================
 def run_monitoring():
     """
-    Checks all financial records that don't have an exception yet,
-    and creates exception cases for any unusual variance found.
+    POST: Runs the exception detection workflow.
     """
     try:
         result = finance_service.run_monitoring()
@@ -65,60 +68,189 @@ def run_monitoring():
 # =====================================================================
 def list_exceptions():
     """
-    Returns exception cases. Supports optional filters via URL query:
-    /api/exceptions?severity=CRITICAL&status=OPEN
+    GET: Returns exception cases via Stored Procedure 'sp_get_exceptions'.
+    Supports query parameters: ?severity=CRITICAL&status=OPEN
     """
     severity = request.args.get("severity")
     status = request.args.get("status")
     try:
-        exceptions = finance_service.get_exceptions(severity=severity, status=status)
-        return jsonify(exceptions), 200
+        rows = call_sp("sp_get_exceptions", [severity, status])
+        # Format owner and financial_record nested objects for frontend compatibility
+        formatted = []
+        for r in rows:
+            formatted.append({
+                "id": r.get("id"),
+                "financial_record_id": r.get("financial_record_id"),
+                "variance_percent": r.get("variance_percent"),
+                "severity": r.get("severity"),
+                "possible_reason": r.get("possible_reason"),
+                "status": r.get("status"),
+                "owner_id": r.get("owner_id"),
+                "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
+                "escalation_level": r.get("escalation_level"),
+                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+                "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
+                "financial_record": {
+                    "id": r.get("financial_record_id"),
+                    "category": r.get("record_category"),
+                    "period": r.get("record_period"),
+                    "department": r.get("record_department"),
+                    "budget_amount": r.get("record_budget"),
+                    "actual_amount": r.get("record_actual"),
+                } if r.get("financial_record_id") else None,
+                "owner": {
+                    "id": r.get("owner_id"),
+                    "name": r.get("owner_name"),
+                    "email": r.get("owner_email"),
+                    "role": r.get("owner_role"),
+                    "level": r.get("owner_level"),
+                } if r.get("owner_id") else None,
+            })
+        return jsonify(formatted), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 def list_overdue_exceptions():
-    """Returns exception cases whose SLA deadline has already passed."""
+    """
+    GET: Returns overdue exception cases via Stored Procedure 'sp_get_overdue_exceptions'.
+    """
     try:
-        overdue = finance_service.get_overdue_exceptions()
-        return jsonify(overdue), 200
+        rows = call_sp("sp_get_overdue_exceptions")
+        formatted = []
+        for r in rows:
+            formatted.append({
+                "id": r.get("id"),
+                "financial_record_id": r.get("financial_record_id"),
+                "variance_percent": r.get("variance_percent"),
+                "severity": r.get("severity"),
+                "possible_reason": r.get("possible_reason"),
+                "status": r.get("status"),
+                "owner_id": r.get("owner_id"),
+                "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
+                "escalation_level": r.get("escalation_level"),
+                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+                "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
+                "financial_record": {
+                    "id": r.get("financial_record_id"),
+                    "category": r.get("record_category"),
+                    "period": r.get("record_period"),
+                    "department": r.get("record_department"),
+                    "budget_amount": r.get("record_budget"),
+                    "actual_amount": r.get("record_actual"),
+                } if r.get("financial_record_id") else None,
+                "owner": {
+                    "id": r.get("owner_id"),
+                    "name": r.get("owner_name"),
+                    "email": r.get("owner_email"),
+                    "role": r.get("owner_role"),
+                    "level": r.get("owner_level"),
+                } if r.get("owner_id") else None,
+            })
+        return jsonify(formatted), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 def get_exception(exception_id):
-    """Returns full detail of a single exception case."""
+    """
+    GET: Returns details of a single exception via Stored Procedure 'sp_get_exception_by_id'.
+    """
     try:
-        exception = finance_service.get_exception_by_id(exception_id)
-        if exception is None:
+        rows = call_sp("sp_get_exception_by_id", [exception_id])
+        if not rows:
             return jsonify({"error": "Exception case not found"}), 404
-        return jsonify(exception), 200
+        r = rows[0]
+        case_data = {
+            "id": r.get("id"),
+            "financial_record_id": r.get("financial_record_id"),
+            "variance_percent": r.get("variance_percent"),
+            "severity": r.get("severity"),
+            "possible_reason": r.get("possible_reason"),
+            "status": r.get("status"),
+            "owner_id": r.get("owner_id"),
+            "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
+            "escalation_level": r.get("escalation_level"),
+            "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+            "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
+            "financial_record": {
+                "id": r.get("financial_record_id"),
+                "category": r.get("record_category"),
+                "period": r.get("record_period"),
+                "department": r.get("record_department"),
+                "budget_amount": r.get("record_budget"),
+                "actual_amount": r.get("record_actual"),
+            } if r.get("financial_record_id") else None,
+            "owner": {
+                "id": r.get("owner_id"),
+                "name": r.get("owner_name"),
+                "email": r.get("owner_email"),
+                "role": r.get("owner_role"),
+                "level": r.get("owner_level"),
+            } if r.get("owner_id") else None,
+        }
+        return jsonify(case_data), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 def update_exception(exception_id):
     """
-    Updates a case -- typically its status or owner.
-    Expected JSON body (any of these, all optional):
-    { "status": "IN_PROGRESS", "owner_id": 2, "possible_reason": "..." }
+    PUT: Updates status, owner, or reason via Stored Procedure 'sp_update_exception'.
     """
     data = request.get_json(force=True, silent=True) or {}
+    status = data.get("status")
+    owner_id = data.get("owner_id")
+    possible_reason = data.get("possible_reason")
+
     try:
-        updated = finance_service.update_exception(exception_id, data)
-        if updated is None:
+        rows = call_sp(
+            "sp_update_exception",
+            [exception_id, status, owner_id, possible_reason],
+        )
+        if not rows:
             return jsonify({"error": "Exception case not found"}), 404
+        r = rows[0]
+        updated = {
+            "id": r.get("id"),
+            "financial_record_id": r.get("financial_record_id"),
+            "variance_percent": r.get("variance_percent"),
+            "severity": r.get("severity"),
+            "possible_reason": r.get("possible_reason"),
+            "status": r.get("status"),
+            "owner_id": r.get("owner_id"),
+            "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
+            "escalation_level": r.get("escalation_level"),
+            "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+            "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
+        }
         return jsonify(updated), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
 
 def escalate_exception(exception_id):
-    """Escalates a case to the next, more senior owner."""
+    """
+    POST: Escalates a case via Stored Procedure 'sp_escalate_exception'.
+    """
     try:
-        escalated = finance_service.escalate_exception(exception_id)
-        if escalated is None:
+        rows = call_sp("sp_escalate_exception", [exception_id])
+        if not rows:
             return jsonify({"error": "Exception case not found"}), 404
+        r = rows[0]
+        escalated = {
+            "id": r.get("id"),
+            "financial_record_id": r.get("financial_record_id"),
+            "variance_percent": r.get("variance_percent"),
+            "severity": r.get("severity"),
+            "possible_reason": r.get("possible_reason"),
+            "status": r.get("status"),
+            "owner_id": r.get("owner_id"),
+            "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
+            "escalation_level": r.get("escalation_level"),
+            "created_at": str(r.get("created_at")) if r.get("created_at") else None,
+            "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
+        }
         return jsonify(escalated), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
@@ -128,9 +260,31 @@ def escalate_exception(exception_id):
 # DASHBOARD
 # =====================================================================
 def dashboard():
-    """Returns summary numbers for the dashboard UI."""
+    """
+    GET: Returns dashboard summary via Stored Procedure 'sp_get_dashboard_summary'.
+    """
     try:
-        summary = finance_service.get_dashboard_summary()
+        rows = call_sp("sp_get_dashboard_summary")
+        if not rows:
+            return jsonify({}), 200
+        r = rows[0]
+        summary = {
+            "total_financial_records": r.get("total_financial_records", 0),
+            "total_exceptions": r.get("total_exceptions", 0),
+            "exceptions_by_severity": {
+                "LOW": r.get("count_low", 0),
+                "MEDIUM": r.get("count_medium", 0),
+                "HIGH": r.get("count_high", 0),
+                "CRITICAL": r.get("count_critical", 0),
+            },
+            "exceptions_by_status": {
+                "OPEN": r.get("count_open", 0),
+                "IN_PROGRESS": r.get("count_in_progress", 0),
+                "RESOLVED": r.get("count_resolved", 0),
+                "ESCALATED": r.get("count_escalated", 0),
+            },
+            "overdue_exceptions": r.get("overdue_exceptions", 0),
+        }
         return jsonify(summary), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
@@ -141,8 +295,7 @@ def dashboard():
 # =====================================================================
 def chat():
     """
-    Expected JSON body: { "question": "Why did revenue decrease?" }
-    Answers using only real FEMA data (RAG: ChromaDB + LLM).
+    POST: Expected JSON body: { "question": "Why did revenue decrease?" }
     """
     data = request.get_json(force=True, silent=True) or {}
     question = data.get("question", "").strip()
@@ -156,19 +309,12 @@ def chat():
         return jsonify({"error": str(error)}), 500
 
 
+# =====================================================================
+# DIRECT STORED PROCEDURE EXECUTION
+# =====================================================================
 def execute_stored_procedure():
     """
-    Directly calls any registered MySQL Stored Procedure and returns its answer.
-    Expected JSON body:
-    {
-        "sp_name": "sp_get_dashboard_summary",
-        "params": []
-    }
-    or:
-    {
-        "sp_name": "sp_add_financial_record",
-        "params": ["Revenue", "2026-09", "Sales", 1000000, 600000]
-    }
+    POST: Directly calls any registered MySQL Stored Procedure and returns result.
     """
     data = request.get_json(force=True, silent=True) or {}
     sp_name = data.get("sp_name")
@@ -194,12 +340,11 @@ def execute_stored_procedure():
         return jsonify({"error": f"Procedure '{sp_name}' is not in allowed list"}), 403
 
     try:
-        from dbConnection.db import call_sp
         results = call_sp(sp_name, params)
         return jsonify({
             "status": "success",
             "sp_name": sp_name,
-            "data": results
+            "data": results,
         }), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
