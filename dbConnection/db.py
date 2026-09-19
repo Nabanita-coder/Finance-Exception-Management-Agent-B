@@ -21,6 +21,8 @@ from datetime import datetime
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
+import pymysql
+import pymysql.cursors
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Text, DateTime, ForeignKey, text
 )
@@ -166,11 +168,154 @@ def get_session():
     return SessionLocal()
 
 
+def get_raw_connection():
+    """Returns a direct PyMySQL connection configured for dict cursors."""
+    return pymysql.connect(
+        host=DB_HOST,
+        port=int(DB_PORT),
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
+    )
+
+
+def call_sp(proc_name: str, params: list = None) -> list:
+    """
+    Executes a MySQL Stored Procedure and returns result rows as a list of dicts.
+    Handles procedures that have multiple internal statements / nested calls.
+    """
+    if params is None:
+        params = []
+    conn = get_raw_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.callproc(proc_name, params)
+            results = cursor.fetchall()
+            while cursor.nextset():
+                extra = cursor.fetchall()
+                if extra:
+                    results = extra
+            return list(results or [])
+    finally:
+        conn.close()
+
+
+def call_sp_single(proc_name: str, params: list = None) -> dict:
+    """Executes a Stored Procedure and returns the first row, or None."""
+    rows = call_sp(proc_name, params)
+    return rows[0] if rows else None
+
+
+def format_record_row(row: dict) -> dict:
+    """Normalizes a raw financial_records row into clean API output format."""
+    if not row:
+        return None
+    created_at = row.get("created_at")
+    if hasattr(created_at, "isoformat"):
+        created_at = created_at.isoformat()
+    return {
+        "id": row.get("id"),
+        "category": row.get("category"),
+        "period": row.get("period"),
+        "department": row.get("department"),
+        "budget_amount": float(row.get("budget_amount", 0)),
+        "actual_amount": float(row.get("actual_amount", 0)),
+        "created_at": created_at,
+    }
+
+
+def format_exception_row(row: dict) -> dict:
+    """Normalizes a joined exception_cases row into the standard API structure."""
+    if not row:
+        return None
+
+    created_at = row.get("created_at")
+    if hasattr(created_at, "isoformat"):
+        created_at = created_at.isoformat()
+
+    updated_at = row.get("updated_at")
+    if hasattr(updated_at, "isoformat"):
+        updated_at = updated_at.isoformat()
+
+    sla_deadline = row.get("sla_deadline")
+    if hasattr(sla_deadline, "isoformat"):
+        sla_deadline = sla_deadline.isoformat()
+
+    rec_created_at = row.get("record_created_at")
+    if hasattr(rec_created_at, "isoformat"):
+        rec_created_at = rec_created_at.isoformat()
+
+    financial_record = None
+    if row.get("financial_record_id"):
+        financial_record = {
+            "id": row["financial_record_id"],
+            "category": row.get("record_category"),
+            "period": row.get("record_period"),
+            "department": row.get("record_department"),
+            "budget_amount": float(row.get("record_budget", 0)) if row.get("record_budget") is not None else 0.0,
+            "actual_amount": float(row.get("record_actual", 0)) if row.get("record_actual") is not None else 0.0,
+            "created_at": rec_created_at,
+        }
+
+    owner = None
+    if row.get("owner_id"):
+        owner = {
+            "id": row["owner_id"],
+            "name": row.get("owner_name"),
+            "email": row.get("owner_email"),
+            "role": row.get("owner_role"),
+            "level": row.get("owner_level"),
+        }
+
+    return {
+        "id": row.get("id"),
+        "financial_record_id": row.get("financial_record_id"),
+        "financial_record": financial_record,
+        "variance_percent": float(row.get("variance_percent", 0)),
+        "severity": row.get("severity"),
+        "possible_reason": row.get("possible_reason"),
+        "status": row.get("status"),
+        "owner": owner,
+        "sla_deadline": sla_deadline,
+        "escalation_level": row.get("escalation_level", 0),
+        "created_at": created_at,
+        "updated_at": updated_at,
+    }
+
+
+def init_stored_procedures():
+    """
+    Reads dbConnection/stored_procedures.sql and creates/updates
+    all Stored Procedures in MySQL.
+    """
+    sp_file = os.path.join(os.path.dirname(__file__), "stored_procedures.sql")
+    if not os.path.exists(sp_file):
+        return
+
+    with open(sp_file, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    blocks = content.split("-- PROCEDURE_DELIMITER")
+    conn = get_raw_connection()
+    try:
+        with conn.cursor() as cursor:
+            for block in blocks:
+                cleaned = "\n".join(
+                    line for line in block.splitlines() if not line.strip().startswith("--")
+                ).strip()
+                if cleaned:
+                    cursor.execute(cleaned)
+        print("Stored procedures loaded and registered into MySQL.")
+    finally:
+        conn.close()
+
+
 def init_db():
     """
     Creates all tables in MySQL if they don't already exist,
-    and adds a few starter Owners so the app has someone to
-    assign cases to right from the start.
+    adds starter Owners, and compiles all Stored Procedures.
 
     This is called once when the Flask app starts (see app.py).
     """
@@ -182,10 +327,10 @@ def init_db():
         conn.commit()
     server_engine.dispose()
 
-    # 2. This looks at every class above (Owner, FinancialRecord, ExceptionCase)
-    # and creates a matching table in MySQL if it isn't there yet.
+    # 2. Creates matching tables in MySQL if not there yet
     Base.metadata.create_all(bind=engine)
 
+    # 3. Seed starter owners
     session = get_session()
     try:
         existing_owners = session.query(Owner).count()
@@ -205,3 +350,7 @@ def init_db():
             print("Seeded starter owners into the 'owners' table.")
     finally:
         session.close()
+
+    # 4. Compile and register all Stored Procedures in MySQL
+    init_stored_procedures()
+

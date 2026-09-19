@@ -1,70 +1,14 @@
 -- ============================================================
--- schema.sql
--- ------------------------------------------------------------
--- This file is ONLY for reference / viewing in MySQL Workbench.
--- You do NOT need to run this by hand -- when you start the app
--- with "python app.py", SQLAlchemy (dbConnection/db.py) creates
--- these same tables for you automatically.
---
--- If you'd like to create them manually in Workbench instead,
--- just run this whole script.
+-- FEMA Stored Procedures
+-- Split each executable block with: -- PROCEDURE_DELIMITER
 -- ============================================================
 
-CREATE DATABASE IF NOT EXISTS fema_db;
 USE fema_db;
 
--- Table 1: Owners (the people who fix exception cases)
-CREATE TABLE IF NOT EXISTS owners (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    email VARCHAR(120),
-    role VARCHAR(50) NOT NULL,   -- Finance Executive / Finance Manager / Senior Finance Manager / CFO
-    level INT NOT NULL           -- 1 = lowest seniority, 4 = highest (CFO)
-);
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_add_financial_record;
 
--- Table 2: Financial Records (budget vs actual numbers)
-CREATE TABLE IF NOT EXISTS financial_records (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    category VARCHAR(50) NOT NULL,      -- e.g. Revenue, Expense
-    period VARCHAR(20) NOT NULL,        -- e.g. 2026-09
-    department VARCHAR(100),
-    budget_amount FLOAT NOT NULL,
-    actual_amount FLOAT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Table 3: Exception Cases (the "case files" FEMA creates)
-CREATE TABLE IF NOT EXISTS exception_cases (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    financial_record_id INT NOT NULL,
-    variance_percent FLOAT NOT NULL,
-    severity VARCHAR(20) NOT NULL,           -- LOW / MEDIUM / HIGH / CRITICAL
-    possible_reason TEXT,
-    status VARCHAR(20) DEFAULT 'OPEN',       -- OPEN / IN_PROGRESS / RESOLVED / ESCALATED
-    owner_id INT,
-    sla_deadline DATETIME,
-    escalation_level INT DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    FOREIGN KEY (financial_record_id) REFERENCES financial_records(id),
-    FOREIGN KEY (owner_id) REFERENCES owners(id)
-);
-
--- Starter owners (app.py also does this automatically on first run)
-INSERT IGNORE INTO owners (id, name, email, role, level) VALUES
-    (1, 'Asha Verma', 'asha@company.com', 'Finance Executive', 1),
-    (2, 'Rohit Sharma', 'rohit@company.com', 'Finance Manager', 2),
-    (3, 'Neha Kapoor', 'neha@company.com', 'Senior Finance Manager', 3),
-    (4, 'CFO Office', 'cfo@company.com', 'CFO', 4);
-
--- ============================================================
--- STORED PROCEDURES
--- ============================================================
-
-DELIMITER $$
-
--- 1. Add Financial Record
-DROP PROCEDURE IF EXISTS sp_add_financial_record$$
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_add_financial_record(
     IN p_category VARCHAR(50),
     IN p_period VARCHAR(20),
@@ -79,19 +23,23 @@ BEGIN
     SELECT id, category, period, department, budget_amount, actual_amount, created_at
     FROM financial_records
     WHERE id = LAST_INSERT_ID();
-END$$
+END;
 
--- 2. Get All Financial Records
-DROP PROCEDURE IF EXISTS sp_get_all_financial_records$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_all_financial_records;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_all_financial_records()
 BEGIN
     SELECT id, category, period, department, budget_amount, actual_amount, created_at
     FROM financial_records
     ORDER BY id DESC;
-END$$
+END;
 
--- 3. Get Unprocessed Records (records without exception case)
-DROP PROCEDURE IF EXISTS sp_get_unprocessed_financial_records$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_unprocessed_financial_records;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_unprocessed_financial_records()
 BEGIN
     SELECT fr.id, fr.category, fr.period, fr.department, fr.budget_amount, fr.actual_amount, fr.created_at
@@ -99,10 +47,12 @@ BEGIN
     LEFT JOIN exception_cases ec ON fr.id = ec.financial_record_id
     WHERE ec.id IS NULL
     ORDER BY fr.id ASC;
-END$$
+END;
 
--- 4. Create Exception Case
-DROP PROCEDURE IF EXISTS sp_create_exception_case$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_create_exception_case;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_create_exception_case(
     IN p_financial_record_id INT,
     IN p_variance_percent FLOAT,
@@ -135,10 +85,12 @@ BEGIN
     LEFT JOIN financial_records fr ON ec.financial_record_id = fr.id
     LEFT JOIN owners o ON ec.owner_id = o.id
     WHERE ec.id = LAST_INSERT_ID();
-END$$
+END;
 
--- 5. Get Exceptions (Filtered or All)
-DROP PROCEDURE IF EXISTS sp_get_exceptions$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_exceptions;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_exceptions(
     IN p_severity VARCHAR(20),
     IN p_status VARCHAR(20)
@@ -158,10 +110,12 @@ BEGIN
     WHERE (p_severity IS NULL OR p_severity = '' OR ec.severity = p_severity)
       AND (p_status IS NULL OR p_status = '' OR ec.status = p_status)
     ORDER BY ec.id DESC;
-END$$
+END;
 
--- 6. Get Exception By ID
-DROP PROCEDURE IF EXISTS sp_get_exception_by_id$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_exception_by_id;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_exception_by_id(
     IN p_exception_id INT
 )
@@ -178,10 +132,12 @@ BEGIN
     LEFT JOIN financial_records fr ON ec.financial_record_id = fr.id
     LEFT JOIN owners o ON ec.owner_id = o.id
     WHERE ec.id = p_exception_id;
-END$$
+END;
 
--- 7. Get Overdue Exceptions
-DROP PROCEDURE IF EXISTS sp_get_overdue_exceptions$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_overdue_exceptions;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_overdue_exceptions()
 BEGIN
     SELECT 
@@ -197,10 +153,12 @@ BEGIN
     LEFT JOIN owners o ON ec.owner_id = o.id
     WHERE ec.sla_deadline < NOW() AND ec.status != 'RESOLVED'
     ORDER BY ec.sla_deadline ASC;
-END$$
+END;
 
--- 8. Update Exception
-DROP PROCEDURE IF EXISTS sp_update_exception$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_update_exception;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_update_exception(
     IN p_exception_id INT,
     IN p_status VARCHAR(20),
@@ -217,10 +175,12 @@ BEGIN
     WHERE id = p_exception_id;
 
     CALL sp_get_exception_by_id(p_exception_id);
-END$$
+END;
 
--- 9. Escalate Exception
-DROP PROCEDURE IF EXISTS sp_escalate_exception$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_escalate_exception;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_escalate_exception(
     IN p_exception_id INT
 )
@@ -263,10 +223,12 @@ BEGIN
     WHERE id = p_exception_id;
 
     CALL sp_get_exception_by_id(p_exception_id);
-END$$
+END;
 
--- 10. Dashboard Summary
-DROP PROCEDURE IF EXISTS sp_get_dashboard_summary$$
+-- PROCEDURE_DELIMITER
+DROP PROCEDURE IF EXISTS sp_get_dashboard_summary;
+
+-- PROCEDURE_DELIMITER
 CREATE PROCEDURE sp_get_dashboard_summary()
 BEGIN
     SELECT
@@ -281,7 +243,4 @@ BEGIN
         (SELECT COUNT(*) FROM exception_cases WHERE status = 'RESOLVED') AS count_resolved,
         (SELECT COUNT(*) FROM exception_cases WHERE status = 'ESCALATED') AS count_escalated,
         (SELECT COUNT(*) FROM exception_cases WHERE sla_deadline < NOW() AND status != 'RESOLVED') AS overdue_exceptions;
-END$$
-
-DELIMITER ;
-
+END;

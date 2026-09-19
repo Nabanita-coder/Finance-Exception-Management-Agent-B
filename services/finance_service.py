@@ -16,7 +16,10 @@ from datetime import datetime, timedelta
 
 from dotenv import load_dotenv
 
-from dbConnection.db import get_session, FinancialRecord, Owner, ExceptionCase
+from dbConnection.db import (
+    get_session, FinancialRecord, Owner, ExceptionCase,
+    call_sp, call_sp_single, format_record_row, format_exception_row
+)
 
 load_dotenv()
 
@@ -183,31 +186,22 @@ def calculate_sla_deadline(severity: str) -> datetime:
 # FINANCIAL RECORDS
 # =====================================================================
 def add_financial_record(data: dict) -> dict:
-    """Saves a new Budget vs Actual entry into MySQL."""
-    session = get_session()
-    try:
-        record = FinancialRecord(
-            category=data["category"],
-            period=data["period"],
-            department=data.get("department"),
-            budget_amount=float(data["budget_amount"]),
-            actual_amount=float(data["actual_amount"]),
-        )
-        session.add(record)
-        session.commit()
-        session.refresh(record)
-        return record.to_dict()
-    finally:
-        session.close()
+    """Saves a new Budget vs Actual entry using MySQL Stored Procedure sp_add_financial_record."""
+    params = [
+        data["category"],
+        data["period"],
+        data.get("department") or None,
+        float(data["budget_amount"]),
+        float(data["actual_amount"]),
+    ]
+    row = call_sp_single("sp_add_financial_record", params)
+    return format_record_row(row)
 
 
 def get_all_financial_records() -> list:
-    session = get_session()
-    try:
-        records = session.query(FinancialRecord).order_by(FinancialRecord.id.desc()).all()
-        return [r.to_dict() for r in records]
-    finally:
-        session.close()
+    """Returns all financial records using MySQL Stored Procedure sp_get_all_financial_records."""
+    rows = call_sp("sp_get_all_financial_records")
+    return [format_record_row(r) for r in rows]
 
 
 # =====================================================================
@@ -215,27 +209,18 @@ def get_all_financial_records() -> list:
 # =====================================================================
 def run_monitoring() -> dict:
     """
-    Goes through every financial record that does NOT already have an
-    exception case, calculates variance, and if it's unusual, creates
-    a full exception case: severity + root cause + owner + SLA deadline.
-
-    Returns a small summary of what happened.
+    Finds unprocessed financial records using sp_get_unprocessed_financial_records,
+    calculates variance, and creates exception cases using sp_create_exception_case.
     """
-    session = get_session()
+    records_to_check = call_sp("sp_get_unprocessed_financial_records")
     created = []
-    try:
-        # Find records that don't already have an exception case.
-        records_with_exceptions = {
-            e.financial_record_id
-            for e in session.query(ExceptionCase.financial_record_id).all()
-        }
-        all_records = session.query(FinancialRecord).all()
-        records_to_check = [
-            r for r in all_records if r.id not in records_with_exceptions
-        ]
 
+    session = get_session()
+    try:
         for record in records_to_check:
-            variance = calculate_variance(record.budget_amount, record.actual_amount)
+            budget = float(record["budget_amount"])
+            actual = float(record["actual_amount"])
+            variance = calculate_variance(budget, actual)
 
             # Anything under 10% variance is considered normal -- no exception.
             if abs(variance) < 10:
@@ -243,25 +228,22 @@ def run_monitoring() -> dict:
 
             severity = classify_severity(variance)
             reason = determine_root_cause(
-                record.category, record.budget_amount, record.actual_amount, variance
+                record["category"], budget, actual, variance
             )
             owner = assign_owner(session, severity)
             deadline = calculate_sla_deadline(severity)
 
-            exception = ExceptionCase(
-                financial_record_id=record.id,
-                variance_percent=round(variance, 2),
-                severity=severity,
-                possible_reason=reason,
-                status="OPEN",
-                owner_id=owner.id if owner else None,
-                sla_deadline=deadline,
-                escalation_level=0,
-            )
-            session.add(exception)
-            session.commit()
-            session.refresh(exception)
-            created.append(exception.to_dict())
+            params = [
+                int(record["id"]),
+                round(variance, 2),
+                severity,
+                reason,
+                owner.id if owner else None,
+                deadline.strftime("%Y-%m-%d %H:%M:%S"),
+            ]
+            new_case = call_sp_single("sp_create_exception_case", params)
+            if new_case:
+                created.append(format_exception_row(new_case))
 
         return {
             "records_checked": len(records_to_check),
@@ -276,142 +258,76 @@ def run_monitoring() -> dict:
 # EXCEPTION CASES: READ / UPDATE / ESCALATE
 # =====================================================================
 def get_exceptions(severity: str = None, status: str = None) -> list:
-    session = get_session()
-    try:
-        query = session.query(ExceptionCase)
-        if severity:
-            query = query.filter(ExceptionCase.severity == severity.upper())
-        if status:
-            query = query.filter(ExceptionCase.status == status.upper())
-        results = query.order_by(ExceptionCase.id.desc()).all()
-        return [e.to_dict() for e in results]
-    finally:
-        session.close()
+    """Returns exception cases using MySQL Stored Procedure sp_get_exceptions."""
+    params = [
+        severity.upper() if severity else None,
+        status.upper() if status else None,
+    ]
+    rows = call_sp("sp_get_exceptions", params)
+    return [format_exception_row(r) for r in rows]
 
 
 def get_exception_by_id(exception_id: int):
-    session = get_session()
-    try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        return exception.to_dict() if exception else None
-    finally:
-        session.close()
+    """Returns full detail of a single exception case using sp_get_exception_by_id."""
+    row = call_sp_single("sp_get_exception_by_id", [exception_id])
+    return format_exception_row(row)
 
 
 def get_overdue_exceptions() -> list:
-    """Cases whose SLA deadline has already passed AND are not yet resolved."""
-    session = get_session()
-    try:
-        now = datetime.utcnow()
-        results = (
-            session.query(ExceptionCase)
-            .filter(ExceptionCase.sla_deadline < now)
-            .filter(ExceptionCase.status != "RESOLVED")
-            .order_by(ExceptionCase.sla_deadline.asc())
-            .all()
-        )
-        return [e.to_dict() for e in results]
-    finally:
-        session.close()
+    """Cases whose SLA deadline has already passed AND are not yet resolved (sp_get_overdue_exceptions)."""
+    rows = call_sp("sp_get_overdue_exceptions")
+    return [format_exception_row(r) for r in rows]
 
 
 def update_exception(exception_id: int, data: dict):
-    """
-    Lets a user update a case -- typically its status
-    (e.g. move from OPEN -> IN_PROGRESS -> RESOLVED) or reassign it
-    to a different owner.
-    """
-    session = get_session()
-    try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        if exception is None:
-            return None
+    """Updates status, owner, or possible reason using sp_update_exception."""
+    status_val = data.get("status")
+    status_str = status_val.upper() if status_val else None
+    owner_id_val = int(data["owner_id"]) if "owner_id" in data and data["owner_id"] is not None else None
+    reason_val = data.get("possible_reason")
 
-        if "status" in data:
-            exception.status = data["status"].upper()
-        if "owner_id" in data:
-            exception.owner_id = data["owner_id"]
-        if "possible_reason" in data:
-            exception.possible_reason = data["possible_reason"]
-
-        exception.updated_at = datetime.utcnow()
-        session.commit()
-        session.refresh(exception)
-        return exception.to_dict()
-    finally:
-        session.close()
+    row = call_sp_single("sp_update_exception", [exception_id, status_str, owner_id_val, reason_val])
+    return format_exception_row(row)
 
 
 def escalate_exception(exception_id: int):
-    """
-    Bumps a case up to the next, more senior owner and marks it ESCALATED.
-    Used when a case has breached its SLA deadline and is still unresolved.
-    """
-    session = get_session()
-    try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        if exception is None:
-            return None
-
-        current_role = exception.owner.role if exception.owner else ESCALATION_ORDER[0]
-        try:
-            current_index = ESCALATION_ORDER.index(current_role)
-        except ValueError:
-            current_index = 0
-
-        next_index = min(current_index + 1, len(ESCALATION_ORDER) - 1)
-        next_role = ESCALATION_ORDER[next_index]
-
-        next_owner = session.query(Owner).filter(Owner.role == next_role).first()
-        if next_owner:
-            exception.owner_id = next_owner.id
-
-        exception.escalation_level = (exception.escalation_level or 0) + 1
-        exception.status = "ESCALATED"
-        exception.updated_at = datetime.utcnow()
-        session.commit()
-        session.refresh(exception)
-        return exception.to_dict()
-    finally:
-        session.close()
+    """Bumps case to next senior owner and marks ESCALATED using sp_escalate_exception."""
+    row = call_sp_single("sp_escalate_exception", [exception_id])
+    return format_exception_row(row)
 
 
 # =====================================================================
 # DASHBOARD
 # =====================================================================
 def get_dashboard_summary() -> dict:
-    session = get_session()
-    try:
-        total_records = session.query(FinancialRecord).count()
-        total_exceptions = session.query(ExceptionCase).count()
-
-        by_severity = {}
-        for severity in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]:
-            by_severity[severity] = (
-                session.query(ExceptionCase)
-                .filter(ExceptionCase.severity == severity)
-                .count()
-            )
-
-        by_status = {}
-        for status in ["OPEN", "IN_PROGRESS", "RESOLVED", "ESCALATED"]:
-            by_status[status] = (
-                session.query(ExceptionCase)
-                .filter(ExceptionCase.status == status)
-                .count()
-            )
-
-        overdue_count = len(get_overdue_exceptions())
-
+    """Returns summary numbers using sp_get_dashboard_summary."""
+    row = call_sp_single("sp_get_dashboard_summary")
+    if not row:
         return {
-            "total_financial_records": total_records,
-            "total_exceptions": total_exceptions,
-            "exceptions_by_severity": by_severity,
-            "exceptions_by_status": by_status,
-            "overdue_exceptions": overdue_count,
+            "total_financial_records": 0,
+            "total_exceptions": 0,
+            "exceptions_by_severity": {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0},
+            "exceptions_by_status": {"OPEN": 0, "IN_PROGRESS": 0, "RESOLVED": 0, "ESCALATED": 0},
+            "overdue_exceptions": 0,
         }
-    finally:
-        session.close()
+
+    return {
+        "total_financial_records": int(row.get("total_financial_records") or 0),
+        "total_exceptions": int(row.get("total_exceptions") or 0),
+        "exceptions_by_severity": {
+            "LOW": int(row.get("count_low") or 0),
+            "MEDIUM": int(row.get("count_medium") or 0),
+            "HIGH": int(row.get("count_high") or 0),
+            "CRITICAL": int(row.get("count_critical") or 0),
+        },
+        "exceptions_by_status": {
+            "OPEN": int(row.get("count_open") or 0),
+            "IN_PROGRESS": int(row.get("count_in_progress") or 0),
+            "RESOLVED": int(row.get("count_resolved") or 0),
+            "ESCALATED": int(row.get("count_escalated") or 0),
+        },
+        "overdue_exceptions": int(row.get("overdue_exceptions") or 0),
+    }
 
 
 # =====================================================================
@@ -422,12 +338,7 @@ _chroma_collection = None
 
 
 def _get_chroma_collection():
-    """
-    Lazily creates (or re-opens) our ChromaDB collection.
-    ChromaDB stores text in a way that can be searched by MEANING,
-    not just exact keywords -- this is what powers the chatbot's
-    ability to find relevant facts.
-    """
+    """Lazily creates (or re-opens) our ChromaDB collection."""
     global _chroma_client, _chroma_collection
     if _chroma_collection is not None:
         return _chroma_collection
@@ -441,49 +352,41 @@ def _get_chroma_collection():
 
 def sync_chroma_from_db():
     """
-    Reads every financial record and exception case from MySQL,
-    turns each one into a short paragraph of text, and stores it
-    in ChromaDB so the chatbot can search over it later.
-
-    Run this after adding records / running monitoring, so the
-    chatbot always answers using fresh data.
+    Reads financial records and exception cases, formats them as context,
+    and updates ChromaDB.
     """
     collection = _get_chroma_collection()
-    session = get_session()
-    try:
-        documents = []
-        ids = []
+    documents = []
+    ids = []
 
-        records = session.query(FinancialRecord).all()
-        for r in records:
-            variance = calculate_variance(r.budget_amount, r.actual_amount)
-            text = (
-                f"Financial record #{r.id}: category={r.category}, period={r.period}, "
-                f"department={r.department or 'N/A'}, budget={r.budget_amount}, "
-                f"actual={r.actual_amount}, variance={variance:.2f}%."
-            )
-            documents.append(text)
-            ids.append(f"record_{r.id}")
+    records = get_all_financial_records()
+    for r in records:
+        variance = calculate_variance(r["budget_amount"], r["actual_amount"])
+        text = (
+            f"Financial record #{r['id']}: category={r['category']}, period={r['period']}, "
+            f"department={r['department'] or 'N/A'}, budget={r['budget_amount']}, "
+            f"actual={r['actual_amount']}, variance={variance:.2f}%."
+        )
+        documents.append(text)
+        ids.append(f"record_{r['id']}")
 
-        exceptions = session.query(ExceptionCase).all()
-        for e in exceptions:
-            owner_name = e.owner.name if e.owner else "Unassigned"
-            text = (
-                f"Exception case #{e.id}: linked to financial record #{e.financial_record_id}, "
-                f"variance={e.variance_percent}%, severity={e.severity}, status={e.status}, "
-                f"owner={owner_name}, possible reason: {e.possible_reason}, "
-                f"SLA deadline={e.sla_deadline}, escalation_level={e.escalation_level}."
-            )
-            documents.append(text)
-            ids.append(f"exception_{e.id}")
+    exceptions = get_exceptions()
+    for e in exceptions:
+        owner_name = e["owner"]["name"] if e.get("owner") else "Unassigned"
+        text = (
+            f"Exception case #{e['id']}: linked to financial record #{e['financial_record_id']}, "
+            f"variance={e['variance_percent']}%, severity={e['severity']}, status={e['status']}, "
+            f"owner={owner_name}, possible reason: {e.get('possible_reason')}, "
+            f"SLA deadline={e.get('sla_deadline')}, escalation_level={e.get('escalation_level', 0)}."
+        )
+        documents.append(text)
+        ids.append(f"exception_{e['id']}")
 
-        if documents:
-            # 'upsert' means: add new ones, and update ones that already exist.
-            collection.upsert(documents=documents, ids=ids)
+    if documents:
+        collection.upsert(documents=documents, ids=ids)
 
-        return {"synced_documents": len(documents)}
-    finally:
-        session.close()
+    return {"synced_documents": len(documents)}
+
 
 
 def chat_with_rag(question: str) -> dict:
