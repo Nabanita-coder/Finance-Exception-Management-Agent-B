@@ -30,3 +30,4 @@ except Exception as e:
 
 def get_session():
     return SessionLocal()
+

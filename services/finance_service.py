@@ -75,13 +75,8 @@ def calculate_variance(budget_amount: float, actual_amount: float) -> float:
     """
     Returns variance as a percentage.
     Formula: (Actual - Budget) / Budget * 100
-
-    Example: Budget=10,00,000 Actual=6,00,000 -> variance = -40.0
-    A negative number means actual came in BELOW budget.
-    A positive number means actual came in ABOVE budget.
     """
     if budget_amount == 0:
-        # Avoid dividing by zero. Treat any actual amount as a huge swing.
         return 100.0 if actual_amount != 0 else 0.0
     return ((actual_amount - budget_amount) / budget_amount) * 100.0
 
@@ -108,16 +103,12 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
                           variance_percent: float) -> str:
     """
     Rule-based first guess at "why did this happen".
-    If an ANTHROPIC_API_KEY is configured, we also ask the LLM to phrase
-    a short, careful explanation -- but it is told to reason ONLY from
-    the numbers given, never to invent outside facts.
     """
     direction = "decrease" if actual_amount < budget_amount else "increase"
     base_reason = ROOT_CAUSE_RULES.get((category, direction), DEFAULT_ROOT_CAUSE)
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
-        # No LLM configured -- just return the simple rule-based reason.
         return base_reason
 
     try:
@@ -145,8 +136,6 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
         if llm_text:
             return f"{base_reason} (AI note: {llm_text})"
     except Exception as error:
-        # If the LLM call fails for any reason (bad key, no internet, etc.)
-        # we simply fall back to the rule-based reason -- FEMA still works.
         print(f"[determine_root_cause] LLM enrichment skipped: {error}")
 
     return base_reason
@@ -158,14 +147,10 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
 def assign_owner(session, severity: str) -> Owner:
     """
     Picks the right person to own a case, based on severity.
-    LOW/MEDIUM -> Finance Executive
-    HIGH       -> Finance Manager
-    CRITICAL   -> Senior Finance Manager
     """
     role_needed = OWNER_ROLE_FOR_SEVERITY.get(severity, "Finance Executive")
     owner = session.query(Owner).filter(Owner.role == role_needed).first()
     if owner is None:
-        # Fall back to whichever owner exists, so a case is never left unassigned.
         owner = session.query(Owner).order_by(Owner.level.asc()).first()
     return owner
 
@@ -183,7 +168,7 @@ def calculate_sla_deadline(severity: str) -> datetime:
 # FINANCIAL RECORDS
 # =====================================================================
 def add_financial_record(data: dict) -> dict:
-    """Saves a new Budget vs Actual entry into MySQL."""
+    """Saves a new Budget vs Actual entry."""
     session = get_session()
     try:
         record = FinancialRecord(
@@ -202,6 +187,7 @@ def add_financial_record(data: dict) -> dict:
 
 
 def get_all_financial_records() -> list:
+    """Returns all financial records."""
     session = get_session()
     try:
         records = session.query(FinancialRecord).order_by(FinancialRecord.id.desc()).all()
@@ -215,29 +201,25 @@ def get_all_financial_records() -> list:
 # =====================================================================
 def run_monitoring() -> dict:
     """
-    Goes through every financial record that does NOT already have an
-    exception case, calculates variance, and if it's unusual, creates
-    a full exception case: severity + root cause + owner + SLA deadline.
-
-    Returns a small summary of what happened.
+    Finds unprocessed financial records, calculates variance,
+    and creates exception cases.
     """
     session = get_session()
-    created = []
     try:
-        # Find records that don't already have an exception case.
-        records_with_exceptions = {
-            e.financial_record_id
-            for e in session.query(ExceptionCase.financial_record_id).all()
+        processed_ids = {
+            r[0] for r in session.query(ExceptionCase.financial_record_id).all()
         }
-        all_records = session.query(FinancialRecord).all()
-        records_to_check = [
-            r for r in all_records if r.id not in records_with_exceptions
-        ]
+        unprocessed = (
+            session.query(FinancialRecord)
+            .filter(~FinancialRecord.id.in_(processed_ids))
+            .order_by(FinancialRecord.id.asc())
+            .all()
+        )
 
-        for record in records_to_check:
+        created = []
+        for record in unprocessed:
             variance = calculate_variance(record.budget_amount, record.actual_amount)
 
-            # Anything under 10% variance is considered normal -- no exception.
             if abs(variance) < 10:
                 continue
 
@@ -248,7 +230,7 @@ def run_monitoring() -> dict:
             owner = assign_owner(session, severity)
             deadline = calculate_sla_deadline(severity)
 
-            exception = ExceptionCase(
+            new_case = ExceptionCase(
                 financial_record_id=record.id,
                 variance_percent=round(variance, 2),
                 severity=severity,
@@ -258,13 +240,14 @@ def run_monitoring() -> dict:
                 sla_deadline=deadline,
                 escalation_level=0,
             )
-            session.add(exception)
-            session.commit()
-            session.refresh(exception)
-            created.append(exception.to_dict())
+            session.add(new_case)
+            session.flush()
+            session.refresh(new_case)
+            created.append(new_case.to_dict())
 
+        session.commit()
         return {
-            "records_checked": len(records_to_check),
+            "records_checked": len(unprocessed),
             "exceptions_created": len(created),
             "new_exceptions": created,
         }
@@ -276,24 +259,25 @@ def run_monitoring() -> dict:
 # EXCEPTION CASES: READ / UPDATE / ESCALATE
 # =====================================================================
 def get_exceptions(severity: str = None, status: str = None) -> list:
+    """Returns exception cases."""
     session = get_session()
     try:
-        query = session.query(ExceptionCase)
+        query = session.query(ExceptionCase).order_by(ExceptionCase.id.desc())
         if severity:
             query = query.filter(ExceptionCase.severity == severity.upper())
         if status:
             query = query.filter(ExceptionCase.status == status.upper())
-        results = query.order_by(ExceptionCase.id.desc()).all()
-        return [e.to_dict() for e in results]
+        return [c.to_dict() for c in query.all()]
     finally:
         session.close()
 
 
 def get_exception_by_id(exception_id: int):
+    """Returns full detail of a single exception case."""
     session = get_session()
     try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        return exception.to_dict() if exception else None
+        case = session.query(ExceptionCase).filter(ExceptionCase.id == exception_id).first()
+        return case.to_dict() if case else None
     finally:
         session.close()
 
@@ -303,75 +287,63 @@ def get_overdue_exceptions() -> list:
     session = get_session()
     try:
         now = datetime.utcnow()
-        results = (
+        cases = (
             session.query(ExceptionCase)
-            .filter(ExceptionCase.sla_deadline < now)
-            .filter(ExceptionCase.status != "RESOLVED")
+            .filter(
+                ExceptionCase.sla_deadline < now,
+                ExceptionCase.status != "RESOLVED",
+            )
             .order_by(ExceptionCase.sla_deadline.asc())
             .all()
         )
-        return [e.to_dict() for e in results]
+        return [c.to_dict() for c in cases]
     finally:
         session.close()
 
 
 def update_exception(exception_id: int, data: dict):
-    """
-    Lets a user update a case -- typically its status
-    (e.g. move from OPEN -> IN_PROGRESS -> RESOLVED) or reassign it
-    to a different owner.
-    """
+    """Updates status, owner, or possible reason."""
     session = get_session()
     try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        if exception is None:
+        case = session.query(ExceptionCase).filter(ExceptionCase.id == exception_id).first()
+        if not case:
             return None
 
-        if "status" in data:
-            exception.status = data["status"].upper()
-        if "owner_id" in data:
-            exception.owner_id = data["owner_id"]
-        if "possible_reason" in data:
-            exception.possible_reason = data["possible_reason"]
+        if "status" in data and data["status"]:
+            case.status = data["status"].upper()
+        if "owner_id" in data and data["owner_id"] is not None:
+            case.owner_id = int(data["owner_id"])
+        if "possible_reason" in data and data["possible_reason"] is not None:
+            case.possible_reason = data["possible_reason"]
 
-        exception.updated_at = datetime.utcnow()
         session.commit()
-        session.refresh(exception)
-        return exception.to_dict()
+        session.refresh(case)
+        return case.to_dict()
     finally:
         session.close()
 
 
 def escalate_exception(exception_id: int):
-    """
-    Bumps a case up to the next, more senior owner and marks it ESCALATED.
-    Used when a case has breached its SLA deadline and is still unresolved.
-    """
+    """Bumps case to next senior owner and marks ESCALATED."""
     session = get_session()
     try:
-        exception = session.query(ExceptionCase).get(exception_id)
-        if exception is None:
+        case = session.query(ExceptionCase).filter(ExceptionCase.id == exception_id).first()
+        if not case:
             return None
 
-        current_role = exception.owner.role if exception.owner else ESCALATION_ORDER[0]
-        try:
-            current_index = ESCALATION_ORDER.index(current_role)
-        except ValueError:
-            current_index = 0
-
-        next_index = min(current_index + 1, len(ESCALATION_ORDER) - 1)
-        next_role = ESCALATION_ORDER[next_index]
+        current_level = case.escalation_level or 0
+        next_level = min(current_level + 1, len(ESCALATION_ORDER) - 1)
+        next_role = ESCALATION_ORDER[next_level]
 
         next_owner = session.query(Owner).filter(Owner.role == next_role).first()
         if next_owner:
-            exception.owner_id = next_owner.id
+            case.owner_id = next_owner.id
+        case.escalation_level = next_level
+        case.status = "ESCALATED"
 
-        exception.escalation_level = (exception.escalation_level or 0) + 1
-        exception.status = "ESCALATED"
-        exception.updated_at = datetime.utcnow()
         session.commit()
-        session.refresh(exception)
-        return exception.to_dict()
+        session.refresh(case)
+        return case.to_dict()
     finally:
         session.close()
 
@@ -380,32 +352,26 @@ def escalate_exception(exception_id: int):
 # DASHBOARD
 # =====================================================================
 def get_dashboard_summary() -> dict:
+    """Returns summary numbers for dashboard."""
     session = get_session()
     try:
         total_records = session.query(FinancialRecord).count()
-        total_exceptions = session.query(ExceptionCase).count()
+        exceptions = session.query(ExceptionCase).all()
 
-        by_severity = {}
-        for severity in ["LOW", "MEDIUM", "HIGH", "CRITICAL"]:
-            by_severity[severity] = (
-                session.query(ExceptionCase)
-                .filter(ExceptionCase.severity == severity)
-                .count()
-            )
+        by_severity = {"LOW": 0, "MEDIUM": 0, "HIGH": 0, "CRITICAL": 0}
+        by_status = {"OPEN": 0, "IN_PROGRESS": 0, "RESOLVED": 0, "ESCALATED": 0}
+        overdue_count = 0
+        now = datetime.utcnow()
 
-        by_status = {}
-        for status in ["OPEN", "IN_PROGRESS", "RESOLVED", "ESCALATED"]:
-            by_status[status] = (
-                session.query(ExceptionCase)
-                .filter(ExceptionCase.status == status)
-                .count()
-            )
-
-        overdue_count = len(get_overdue_exceptions())
+        for c in exceptions:
+            by_severity[c.severity] = by_severity.get(c.severity, 0) + 1
+            by_status[c.status] = by_status.get(c.status, 0) + 1
+            if c.sla_deadline and c.sla_deadline < now and c.status != "RESOLVED":
+                overdue_count += 1
 
         return {
             "total_financial_records": total_records,
-            "total_exceptions": total_exceptions,
+            "total_exceptions": len(exceptions),
             "exceptions_by_severity": by_severity,
             "exceptions_by_status": by_status,
             "overdue_exceptions": overdue_count,
@@ -422,12 +388,7 @@ _chroma_collection = None
 
 
 def _get_chroma_collection():
-    """
-    Lazily creates (or re-opens) our ChromaDB collection.
-    ChromaDB stores text in a way that can be searched by MEANING,
-    not just exact keywords -- this is what powers the chatbot's
-    ability to find relevant facts.
-    """
+    """Lazily creates (or re-opens) our ChromaDB collection."""
     global _chroma_client, _chroma_collection
     if _chroma_collection is not None:
         return _chroma_collection
@@ -441,63 +402,46 @@ def _get_chroma_collection():
 
 def sync_chroma_from_db():
     """
-    Reads every financial record and exception case from MySQL,
-    turns each one into a short paragraph of text, and stores it
-    in ChromaDB so the chatbot can search over it later.
-
-    Run this after adding records / running monitoring, so the
-    chatbot always answers using fresh data.
+    Reads financial records and exception cases, formats them as context,
+    and updates ChromaDB.
     """
     collection = _get_chroma_collection()
-    session = get_session()
-    try:
-        documents = []
-        ids = []
+    documents = []
+    ids = []
 
-        records = session.query(FinancialRecord).all()
-        for r in records:
-            variance = calculate_variance(r.budget_amount, r.actual_amount)
-            text = (
-                f"Financial record #{r.id}: category={r.category}, period={r.period}, "
-                f"department={r.department or 'N/A'}, budget={r.budget_amount}, "
-                f"actual={r.actual_amount}, variance={variance:.2f}%."
-            )
-            documents.append(text)
-            ids.append(f"record_{r.id}")
+    records = get_all_financial_records()
+    for r in records:
+        variance = calculate_variance(r["budget_amount"], r["actual_amount"])
+        text = (
+            f"Financial record #{r['id']}: category={r['category']}, period={r['period']}, "
+            f"department={r['department'] or 'N/A'}, budget={r['budget_amount']}, "
+            f"actual={r['actual_amount']}, variance={variance:.2f}%."
+        )
+        documents.append(text)
+        ids.append(f"record_{r['id']}")
 
-        exceptions = session.query(ExceptionCase).all()
-        for e in exceptions:
-            owner_name = e.owner.name if e.owner else "Unassigned"
-            text = (
-                f"Exception case #{e.id}: linked to financial record #{e.financial_record_id}, "
-                f"variance={e.variance_percent}%, severity={e.severity}, status={e.status}, "
-                f"owner={owner_name}, possible reason: {e.possible_reason}, "
-                f"SLA deadline={e.sla_deadline}, escalation_level={e.escalation_level}."
-            )
-            documents.append(text)
-            ids.append(f"exception_{e.id}")
+    exceptions = get_exceptions()
+    for e in exceptions:
+        owner_name = e["owner"]["name"] if e.get("owner") else "Unassigned"
+        text = (
+            f"Exception case #{e['id']}: linked to financial record #{e['financial_record_id']}, "
+            f"variance={e['variance_percent']}%, severity={e['severity']}, status={e['status']}, "
+            f"owner={owner_name}, possible reason: {e.get('possible_reason')}, "
+            f"SLA deadline={e.get('sla_deadline')}, escalation_level={e.get('escalation_level', 0)}."
+        )
+        documents.append(text)
+        ids.append(f"exception_{e['id']}")
 
-        if documents:
-            # 'upsert' means: add new ones, and update ones that already exist.
-            collection.upsert(documents=documents, ids=ids)
+    if documents:
+        collection.upsert(documents=documents, ids=ids)
 
-        return {"synced_documents": len(documents)}
-    finally:
-        session.close()
+    return {"synced_documents": len(documents)}
 
 
 def chat_with_rag(question: str) -> dict:
     """
-    Answers a user's question using RAG:
-      1. RETRIEVE: search ChromaDB for the most relevant facts.
-      2. AUGMENT + GENERATE: give those facts to the LLM and ask it
-         to answer using ONLY that context.
-
-    If nothing relevant is found, or no LLM is configured, FEMA
-    clearly says the information was not found -- it never invents
-    financial numbers.
+    Answers a user's question using RAG.
     """
-    # Make sure Chroma has the latest data before answering.
     sync_chroma_from_db()
     collection = _get_chroma_collection()
 
@@ -522,7 +466,6 @@ def chat_with_rag(question: str) -> dict:
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
-        # No LLM key configured -- just show the raw matching facts.
         return {
             "answer": (
                 "(No LLM key configured, showing raw matching FEMA data instead.)\n"
@@ -564,3 +507,4 @@ def chat_with_rag(question: str) -> dict:
             ),
             "sources": retrieved_ids,
         }
+

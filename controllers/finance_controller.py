@@ -154,3 +154,53 @@ def chat():
         return jsonify(result), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
+
+
+def execute_stored_procedure():
+    """
+    Directly calls any registered MySQL Stored Procedure and returns its answer.
+    Expected JSON body:
+    {
+        "sp_name": "sp_get_dashboard_summary",
+        "params": []
+    }
+    or:
+    {
+        "sp_name": "sp_add_financial_record",
+        "params": ["Revenue", "2026-09", "Sales", 1000000, 600000]
+    }
+    """
+    data = request.get_json(force=True, silent=True) or {}
+    sp_name = data.get("sp_name")
+    params = data.get("params", [])
+
+    if not sp_name:
+        return jsonify({"error": "Missing 'sp_name' in request body"}), 400
+
+    allowed_sps = {
+        "sp_add_financial_record",
+        "sp_get_all_financial_records",
+        "sp_get_unprocessed_financial_records",
+        "sp_create_exception_case",
+        "sp_get_exceptions",
+        "sp_get_exception_by_id",
+        "sp_get_overdue_exceptions",
+        "sp_update_exception",
+        "sp_escalate_exception",
+        "sp_get_dashboard_summary",
+    }
+
+    if sp_name not in allowed_sps:
+        return jsonify({"error": f"Procedure '{sp_name}' is not in allowed list"}), 403
+
+    try:
+        from dbConnection.db import call_sp
+        results = call_sp(sp_name, params)
+        return jsonify({
+            "status": "success",
+            "sp_name": sp_name,
+            "data": results
+        }), 200
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
+
