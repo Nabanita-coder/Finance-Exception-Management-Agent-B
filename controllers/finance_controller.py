@@ -1,28 +1,8 @@
-"""
-controllers/finance_controller.py
------------------------------------
-This file is the "receptionist" of FEMA. It defines every API endpoint
-(URL) that the outside world (our UI, Postman, or another program) can
-call. Each function here:
-  1. Reads what the caller sent (JSON body or URL parameters)
-  2. Calls the correct function in services/finance_service.py to do
-     the real work
-  3. Sends back a JSON response
-
-No business logic (math, decisions) happens in this file -- it only
-passes messages back and forth.
-"""
-
-from flask import Blueprint, request, jsonify
+from flask import request, jsonify
 
 from services import finance_service
 
-# A Blueprint is Flask's way of grouping related routes together.
-# app.py will register this blueprint under the "/api" prefix.
-finance_bp = Blueprint("finance_bp", __name__)
 
-
-@finance_bp.route("/health", methods=["GET"])
 def health_check():
     """Simple check to confirm the API is alive. Useful for testing setup."""
     return jsonify({"status": "ok", "message": "FEMA API is running"}), 200
@@ -31,7 +11,6 @@ def health_check():
 # =====================================================================
 # FINANCIAL RECORDS
 # =====================================================================
-@finance_bp.route("/financial-records", methods=["POST"])
 def create_financial_record():
     """
     Adds a new Budget vs Actual entry.
@@ -57,7 +36,6 @@ def create_financial_record():
         return jsonify({"error": str(error)}), 500
 
 
-@finance_bp.route("/financial-records", methods=["GET"])
 def list_financial_records():
     """Returns every financial record stored in MySQL."""
     try:
@@ -70,7 +48,6 @@ def list_financial_records():
 # =====================================================================
 # MONITORING (runs the detection workflow)
 # =====================================================================
-@finance_bp.route("/monitor", methods=["POST"])
 def run_monitoring():
     """
     Checks all financial records that don't have an exception yet,
@@ -86,7 +63,6 @@ def run_monitoring():
 # =====================================================================
 # EXCEPTION CASES
 # =====================================================================
-@finance_bp.route("/exceptions", methods=["GET"])
 def list_exceptions():
     """
     Returns exception cases. Supports optional filters via URL query:
@@ -101,7 +77,6 @@ def list_exceptions():
         return jsonify({"error": str(error)}), 500
 
 
-@finance_bp.route("/exceptions/overdue", methods=["GET"])
 def list_overdue_exceptions():
     """Returns exception cases whose SLA deadline has already passed."""
     try:
@@ -111,7 +86,6 @@ def list_overdue_exceptions():
         return jsonify({"error": str(error)}), 500
 
 
-@finance_bp.route("/exceptions/<int:exception_id>", methods=["GET"])
 def get_exception(exception_id):
     """Returns full detail of a single exception case."""
     try:
@@ -123,7 +97,6 @@ def get_exception(exception_id):
         return jsonify({"error": str(error)}), 500
 
 
-@finance_bp.route("/exceptions/<int:exception_id>", methods=["PUT"])
 def update_exception(exception_id):
     """
     Updates a case -- typically its status or owner.
@@ -140,7 +113,6 @@ def update_exception(exception_id):
         return jsonify({"error": str(error)}), 500
 
 
-@finance_bp.route("/exceptions/<int:exception_id>/escalate", methods=["POST"])
 def escalate_exception(exception_id):
     """Escalates a case to the next, more senior owner."""
     try:
@@ -155,7 +127,6 @@ def escalate_exception(exception_id):
 # =====================================================================
 # DASHBOARD
 # =====================================================================
-@finance_bp.route("/dashboard", methods=["GET"])
 def dashboard():
     """Returns summary numbers for the dashboard UI."""
     try:
@@ -168,7 +139,6 @@ def dashboard():
 # =====================================================================
 # RAG FINANCE CHATBOT
 # =====================================================================
-@finance_bp.route("/chat", methods=["POST"])
 def chat():
     """
     Expected JSON body: { "question": "Why did revenue decrease?" }

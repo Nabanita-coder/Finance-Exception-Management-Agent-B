@@ -13,10 +13,10 @@ this file and returns whatever they give back.
 
 import os
 from datetime import datetime, timedelta
-
 from dotenv import load_dotenv
 
-from dbConnection.db import get_session, FinancialRecord, Owner, ExceptionCase
+from dbConnection.db import get_session
+from models.finance_models import FinancialRecord, Owner, ExceptionCase
 
 load_dotenv()
 
