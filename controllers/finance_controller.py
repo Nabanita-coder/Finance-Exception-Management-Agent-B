@@ -349,3 +349,28 @@ def execute_stored_procedure():
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
+
+# =====================================================================
+# OWNERS
+# =====================================================================
+def list_owners():
+    """Returns all owners with their real-time active case counts."""
+    try:
+        owners = finance_service.get_all_owners()
+        return jsonify(owners), 200
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
+
+
+def create_owner():
+    """Adds a new team member / owner dynamically."""
+    data = request.get_json(force=True, silent=True) or {}
+    if not data.get("name") or not data.get("role"):
+        return jsonify({"error": "name and role are required"}), 400
+    try:
+        owner = finance_service.add_owner(data)
+        return jsonify(owner), 201
+    except Exception as error:
+        return jsonify({"error": str(error)}), 500
+
+

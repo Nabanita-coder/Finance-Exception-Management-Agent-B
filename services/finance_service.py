@@ -41,21 +41,16 @@ SLA_DAYS = {
     "CRITICAL": 1,
 }
 
-# Which role should first own a case of a given severity.
-OWNER_ROLE_FOR_SEVERITY = {
-    "LOW": "Finance Executive",
-    "MEDIUM": "Finance Executive",
-    "HIGH": "Finance Manager",
-    "CRITICAL": "Senior Finance Manager",
+# Minimum level of seniority required based on severity:
+# LOW / MEDIUM -> Level 1 (Finance Executive+)
+# HIGH -> Level 2 (Finance Manager+)
+# CRITICAL -> Level 3 (Senior Finance Manager+)
+SEVERITY_MIN_LEVEL = {
+    "LOW": 1,
+    "MEDIUM": 1,
+    "HIGH": 2,
+    "CRITICAL": 3,
 }
-
-# The order roles get escalated through, lowest -> highest.
-ESCALATION_ORDER = [
-    "Finance Executive",
-    "Finance Manager",
-    "Senior Finance Manager",
-    "CFO",
-]
 
 # Simple, rule-based "why did this happen" explanations.
 # Key = (category, direction), Value = plain-English possible reason.
@@ -142,17 +137,71 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
 
 
 # =====================================================================
-# STEP: OWNER ASSIGNMENT
+# STEP: OWNER ASSIGNMENT (100% Dynamic Engine)
 # =====================================================================
-def assign_owner(session, severity: str) -> Owner:
+def assign_owner(session, severity: str, department: str = None) -> Owner:
     """
-    Picks the right person to own a case, based on severity.
+    100% Dynamic, Zero-Hardcoded Owner Assignment:
+    1. Determines minimum seniority level required from severity.
+    2. Filters active owners matching the record's department (or 'All' / 'General Finance').
+    3. If no department match, falls back to any qualified active owner.
+    4. Applies Workload Balancing: picks candidate with the LOWEST active case count.
     """
-    role_needed = OWNER_ROLE_FOR_SEVERITY.get(severity, "Finance Executive")
-    owner = session.query(Owner).filter(Owner.role == role_needed).first()
-    if owner is None:
-        owner = session.query(Owner).order_by(Owner.level.asc()).first()
-    return owner
+    min_level = SEVERITY_MIN_LEVEL.get(severity, 1)
+
+    # Base candidate pool: active owners meeting minimum level
+    candidates = (
+        session.query(Owner)
+        .filter(Owner.is_active == 1, Owner.level >= min_level)
+        .all()
+    )
+
+    if not candidates:
+        # Fallback to any active owner if level requirement has no active records
+        candidates = session.query(Owner).filter(Owner.is_active == 1).all()
+
+    if not candidates:
+        # Absolute fallback if table has no active flags set
+        return session.query(Owner).first()
+
+    # Department affinity matching (case-insensitive substring match)
+    matched_candidates = []
+    if department:
+        dept_clean = department.strip().lower()
+        for cand in candidates:
+            owner_dept = (cand.department or "").strip().lower()
+            if (
+                owner_dept == dept_clean
+                or owner_dept in dept_clean
+                or dept_clean in owner_dept
+                or owner_dept in ["all", "general finance"]
+            ):
+                matched_candidates.append(cand)
+
+    pool = matched_candidates if matched_candidates else candidates
+
+    # Workload Balancing: count active open cases for each candidate
+    best_owner = None
+    min_workload = float("inf")
+
+    for cand in pool:
+        open_count = (
+            session.query(ExceptionCase)
+            .filter(
+                ExceptionCase.owner_id == cand.id,
+                ExceptionCase.status.in_(["OPEN", "IN_PROGRESS", "ESCALATED"]),
+            )
+            .count()
+        )
+        if open_count < min_workload:
+            min_workload = open_count
+            best_owner = cand
+        elif open_count == min_workload and best_owner:
+            # Tie breaker: choose the one closest to required seniority level
+            if cand.level < best_owner.level:
+                best_owner = cand
+
+    return best_owner or pool[0]
 
 
 # =====================================================================
@@ -227,7 +276,7 @@ def run_monitoring() -> dict:
             reason = determine_root_cause(
                 record.category, record.budget_amount, record.actual_amount, variance
             )
-            owner = assign_owner(session, severity)
+            owner = assign_owner(session, severity, department=record.department)
             deadline = calculate_sla_deadline(severity)
 
             new_case = ExceptionCase(
@@ -324,23 +373,46 @@ def update_exception(exception_id: int, data: dict):
 
 
 def escalate_exception(exception_id: int):
-    """Bumps case to next senior owner and marks ESCALATED."""
+    """
+    100% Dynamic Escalation:
+    Finds the next senior active owner (level > current owner's level) from MySQL,
+    preferring department affinity or general executive management.
+    """
     session = get_session()
     try:
         case = session.query(ExceptionCase).filter(ExceptionCase.id == exception_id).first()
         if not case:
             return None
 
-        current_level = case.escalation_level or 0
-        next_level = min(current_level + 1, len(ESCALATION_ORDER) - 1)
-        next_role = ESCALATION_ORDER[next_level]
+        current_owner = session.query(Owner).filter(Owner.id == case.owner_id).first()
+        current_level = current_owner.level if current_owner else (case.escalation_level or 1)
 
-        next_owner = session.query(Owner).filter(Owner.role == next_role).first()
-        if next_owner:
-            case.owner_id = next_owner.id
-        case.escalation_level = next_level
+        # Query all active owners with a strictly higher seniority level
+        next_candidates = (
+            session.query(Owner)
+            .filter(Owner.is_active == 1, Owner.level > current_level)
+            .order_by(Owner.level.asc(), Owner.id.asc())
+            .all()
+        )
+
+        if next_candidates:
+            # Department preference for escalation
+            record = session.query(FinancialRecord).filter(FinancialRecord.id == case.financial_record_id).first()
+            rec_dept = (record.department or "").strip().lower() if record else ""
+
+            best_escalated = next_candidates[0]
+            for cand in next_candidates:
+                cand_dept = (cand.department or "").strip().lower()
+                if cand_dept == rec_dept or cand_dept in ["all", "general finance"]:
+                    best_escalated = cand
+                    break
+
+            case.owner_id = best_escalated.id
+            case.escalation_level = best_escalated.level
+        else:
+            case.escalation_level = (case.escalation_level or current_level) + 1
+
         case.status = "ESCALATED"
-
         session.commit()
         session.refresh(case)
         return case.to_dict()
@@ -507,4 +579,52 @@ def chat_with_rag(question: str) -> dict:
             ),
             "sources": retrieved_ids,
         }
+
+
+# =====================================================================
+# DYNAMIC OWNERS MANAGEMENT
+# =====================================================================
+def get_all_owners() -> list:
+    """Returns all active and inactive owners with their current open workload count."""
+    session = get_session()
+    try:
+        owners = session.query(Owner).order_by(Owner.level.asc(), Owner.name.asc()).all()
+        result = []
+        for o in owners:
+            data = o.to_dict()
+            open_cases = (
+                session.query(ExceptionCase)
+                .filter(
+                    ExceptionCase.owner_id == o.id,
+                    ExceptionCase.status.in_(["OPEN", "IN_PROGRESS", "ESCALATED"]),
+                )
+                .count()
+            )
+            data["active_cases"] = open_cases
+            result.append(data)
+        return result
+    finally:
+        session.close()
+
+
+def add_owner(data: dict) -> dict:
+    """Creates a new dynamic owner in the database."""
+    session = get_session()
+    try:
+        owner = Owner(
+            name=data["name"],
+            email=data.get("email"),
+            role=data["role"],
+            level=int(data.get("level", 1)),
+            department=data.get("department", "General Finance"),
+            is_active=int(data.get("is_active", 1)),
+            max_approval_limit=float(data.get("max_approval_limit", 1000000.0)),
+        )
+        session.add(owner)
+        session.commit()
+        session.refresh(owner)
+        return owner.to_dict()
+    finally:
+        session.close()
+
 

@@ -111,6 +111,21 @@ def execute_stored_procedure():
     return finance_controller.execute_stored_procedure()
 
 
+# =====================================================================
+# DYNAMIC OWNERS
+# =====================================================================
+@app.route("/owners", methods=["GET"])
+@app.route("/api/owners", methods=["GET"])
+def list_owners():
+    return finance_controller.list_owners()
+
+
+@app.route("/owners", methods=["POST"])
+@app.route("/api/owners", methods=["POST"])
+def create_owner():
+    return finance_controller.create_owner()
+
+
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "True").lower() == "true"
