@@ -24,6 +24,11 @@ with app.app_context():
 # =====================================================================
 # ROOT & HEALTH CHECK
 # =====================================================================
+@app.route("/", methods=["GET"])
+def home():
+    return finance_controller.health_check()
+
+
 @app.route("/health", methods=["GET"])
 @app.route("/api/health", methods=["GET"])
 def health_check():
@@ -106,6 +111,15 @@ def chat():
 
 
 # =====================================================================
+# DIRECT STORED PROCEDURE EXECUTION
+# =====================================================================
+@app.route("/sp", methods=["POST"])
+@app.route("/api/sp", methods=["POST"])
+def execute_stored_procedure():
+    return finance_controller.execute_stored_procedure()
+
+
+# =====================================================================
 # DYNAMIC OWNERS
 # =====================================================================
 @app.route("/owners", methods=["GET"])
@@ -145,8 +159,6 @@ def auth_me():
 @app.route("/api/auth/roles", methods=["GET"])
 def auth_roles():
     return auth_controller.list_roles()
-
-
 
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))

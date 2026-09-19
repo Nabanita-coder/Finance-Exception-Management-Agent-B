@@ -31,3 +31,29 @@ except Exception as e:
 def get_session():
     return SessionLocal()
 
+
+def call_sp(sp_name: str, params: list = None):
+    """
+    Executes a MySQL stored procedure using the engine connection
+    and returns the result rows as a list of dictionaries.
+    """
+    if params is None:
+        params = []
+    
+    # Construct parameter placeholders: CALL sp_name(:p0, :p1, ...) or CALL sp_name()
+    if params:
+        param_placeholders = ", ".join([f":p{i}" for i in range(len(params))])
+        sql = text(f"CALL {sp_name}({param_placeholders})")
+        param_dict = {f"p{i}": val for i, val in enumerate(params)}
+    else:
+        sql = text(f"CALL {sp_name}()")
+        param_dict = {}
+
+    with engine.begin() as conn:
+        result = conn.execute(sql, param_dict)
+        if result.returns_rows:
+            columns = result.keys()
+            rows = [dict(zip(columns, row)) for row in result.fetchall()]
+            return rows
+        return []
+
