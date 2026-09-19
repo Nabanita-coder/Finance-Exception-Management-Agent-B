@@ -22,6 +22,9 @@ class Owner(Base):
     email = Column(String(120))
     role = Column(String(50), nullable=False)
     level = Column(Integer, nullable=False)
+    department = Column(String(100), default="General Finance")
+    is_active = Column(Integer, default=1)
+    max_approval_limit = Column(Float, default=1000000.0)
 
     def to_dict(self):
         return {
@@ -30,6 +33,9 @@ class Owner(Base):
             "email": self.email,
             "role": self.role,
             "level": self.level,
+            "department": self.department,
+            "is_active": self.is_active,
+            "max_approval_limit": self.max_approval_limit,
         }
 
 
