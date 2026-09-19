@@ -13,6 +13,7 @@ python-dotenv==1.0.1
 # --- RAG (Retrieval Augmented Generation) chatbot ---
 chromadb>=0.5.23
 anthropic==0.34.2
+PyJWT==2.14.0
 flask
 sqlalchemy
 pymysql

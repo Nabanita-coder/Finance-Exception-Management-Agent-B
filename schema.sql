@@ -50,6 +50,32 @@ CREATE TABLE IF NOT EXISTS exception_cases (
     FOREIGN KEY (owner_id) REFERENCES owners(id)
 );
 
+-- Table 4: Roles (0 for Admin, 1 for User)
+CREATE TABLE IF NOT EXISTS roles (
+    id INT PRIMARY KEY,
+    name VARCHAR(50) NOT NULL UNIQUE,
+    description VARCHAR(255),
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Initial Roles
+INSERT IGNORE INTO roles (id, name, description) VALUES
+    (0, 'admin', 'Administrator with full system privileges and case escalation authority'),
+    (1, 'user', 'Standard user with view and basic management access');
+
+-- Table 5: Users (application users with role-based access)
+CREATE TABLE IF NOT EXISTS users (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    username VARCHAR(80) NOT NULL UNIQUE,
+    email VARCHAR(120) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role_id INT NOT NULL DEFAULT 1,
+    full_name VARCHAR(120),
+    is_active TINYINT DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (role_id) REFERENCES roles(id)
+);
+
 -- Starter owners (app.py also does this automatically on first run)
 INSERT IGNORE INTO owners (id, name, email, role, level) VALUES
     (1, 'Asha Verma', 'asha@company.com', 'Finance Executive', 1),

@@ -4,13 +4,21 @@ from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
 
-from controllers import finance_controller
+from controllers import finance_controller, auth_controller
+from services import auth_service
 
 # Load .env variables (DB_HOST, DB_PASSWORD, ANTHROPIC_API_KEY, etc.)
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
+
+# Ensure roles and users tables & initial seed accounts are initialized
+with app.app_context():
+    try:
+        auth_service.init_auth_db()
+    except Exception as _e:
+        print(f"Warning: Could not initialize auth DB on startup: {_e}")
 
 
 # =====================================================================
@@ -110,6 +118,33 @@ def list_owners():
 @app.route("/api/owners", methods=["POST"])
 def create_owner():
     return finance_controller.create_owner()
+
+
+# =====================================================================
+# AUTHENTICATION (ADMIN & USER)
+# =====================================================================
+@app.route("/auth/login", methods=["POST"])
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    return auth_controller.login()
+
+
+@app.route("/auth/register", methods=["POST"])
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    return auth_controller.register()
+
+
+@app.route("/auth/me", methods=["GET"])
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    return auth_controller.me()
+
+
+@app.route("/auth/roles", methods=["GET"])
+@app.route("/api/auth/roles", methods=["GET"])
+def auth_roles():
+    return auth_controller.list_roles()
 
 
 

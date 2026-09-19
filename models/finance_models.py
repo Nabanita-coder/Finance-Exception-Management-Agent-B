@@ -5,6 +5,7 @@ SQLAlchemy ORM Models mapping to existing MySQL tables.
 """
 
 from datetime import datetime
+from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import Column, Integer, String, Float, Text, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -106,4 +107,62 @@ class ExceptionCase(Base):
             "escalation_level": self.escalation_level,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# =========================================================
+# TABLE 4: Roles (0: admin, 1: user)
+# =========================================================
+class Role(Base):
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)  # 0 for Admin, 1 for User
+    name = Column(String(50), unique=True, nullable=False)
+    description = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# =========================================================
+# TABLE 5: Users
+# =========================================================
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    username = Column(String(80), unique=True, nullable=False, index=True)
+    email = Column(String(120), unique=True, nullable=False, index=True)
+    password_hash = Column(String(255), nullable=False)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=False, default=1)
+    full_name = Column(String(120), nullable=True)
+    is_active = Column(Integer, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    role = relationship("Role", lazy="joined")
+
+    def set_password(self, password: str):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        if not self.password_hash:
+            return False
+        return check_password_hash(self.password_hash, password)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "username": self.username,
+            "email": self.email,
+            "role_id": self.role_id,
+            "role": self.role.name if self.role else ("admin" if self.role_id == 0 else "user"),
+            "full_name": self.full_name,
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
