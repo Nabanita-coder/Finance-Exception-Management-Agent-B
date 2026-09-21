@@ -4,7 +4,14 @@ from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
 
-from controllers import finance_controller, auth_controller
+from controllers import (
+    finance_controller,
+    auth_controller,
+    admin_controller,
+    analyst_controller,
+    cfo_controller,
+    auditor_controller,
+)
 from services import auth_service
 
 # Load .env variables (DB_HOST, DB_PASSWORD, ANTHROPIC_API_KEY, etc.)
@@ -135,7 +142,7 @@ def create_owner():
 
 
 # =====================================================================
-# AUTHENTICATION (ADMIN & USER)
+# AUTHENTICATION (ALL 4 ROLES)
 # =====================================================================
 @app.route("/auth/login", methods=["POST"])
 @app.route("/api/auth/login", methods=["POST"])
@@ -159,6 +166,127 @@ def auth_me():
 @app.route("/api/auth/roles", methods=["GET"])
 def auth_roles():
     return auth_controller.list_roles()
+
+
+# =====================================================================
+# ROLE 0: SYSTEM ADMINISTRATOR
+# =====================================================================
+@app.route("/admin/health", methods=["GET"])
+@app.route("/api/admin/health", methods=["GET"])
+def admin_health():
+    return admin_controller.get_system_health()
+
+
+@app.route("/admin/thresholds", methods=["GET"])
+@app.route("/api/admin/thresholds", methods=["GET"])
+def admin_thresholds_get():
+    return admin_controller.get_ai_thresholds()
+
+
+@app.route("/admin/thresholds", methods=["POST", "PUT"])
+@app.route("/api/admin/thresholds", methods=["POST", "PUT"])
+def admin_thresholds_update():
+    return admin_controller.update_ai_threshold()
+
+
+@app.route("/admin/users", methods=["GET"])
+@app.route("/api/admin/users", methods=["GET"])
+def admin_users_list():
+    return admin_controller.list_users()
+
+
+@app.route("/admin/users/role", methods=["POST"])
+@app.route("/api/admin/users/role", methods=["POST"])
+def admin_user_role_update():
+    return admin_controller.update_user_role()
+
+
+@app.route("/admin/logs", methods=["GET"])
+@app.route("/api/admin/logs", methods=["GET"])
+def admin_logs():
+    return admin_controller.get_system_logs()
+
+
+# =====================================================================
+# ROLE 1: ACCOUNTABLE OWNER / FINANCE ANALYST
+# =====================================================================
+@app.route("/analyst/tasks", methods=["GET"])
+@app.route("/api/analyst/tasks", methods=["GET"])
+def analyst_tasks():
+    return analyst_controller.get_my_tasks()
+
+
+@app.route("/analyst/sla-alerts", methods=["GET"])
+@app.route("/api/analyst/sla-alerts", methods=["GET"])
+def analyst_sla_alerts():
+    return analyst_controller.get_sla_alerts()
+
+
+@app.route("/analyst/insight/<int:exception_id>", methods=["GET"])
+@app.route("/api/analyst/insight/<int:exception_id>", methods=["GET"])
+def analyst_root_cause_insight(exception_id):
+    return analyst_controller.get_root_cause_insight(exception_id)
+
+
+@app.route("/analyst/action", methods=["POST"])
+@app.route("/api/analyst/action", methods=["POST"])
+def analyst_quick_action():
+    return analyst_controller.submit_quick_action()
+
+
+# =====================================================================
+# ROLE 2: FINANCE LEADERSHIP / EXECUTIVE (CFO)
+# =====================================================================
+@app.route("/cfo/kpis", methods=["GET"])
+@app.route("/api/cfo/kpis", methods=["GET"])
+def cfo_kpis():
+    return cfo_controller.get_financial_kpis()
+
+
+@app.route("/cfo/early-warnings", methods=["GET"])
+@app.route("/api/cfo/early-warnings", methods=["GET"])
+def cfo_early_warnings():
+    return cfo_controller.get_early_warnings()
+
+
+@app.route("/cfo/escalated-risks", methods=["GET"])
+@app.route("/api/cfo/escalated-risks", methods=["GET"])
+def cfo_escalated_risks():
+    return cfo_controller.get_escalated_risks()
+
+
+@app.route("/cfo/executive-brief", methods=["GET"])
+@app.route("/api/cfo/executive-brief", methods=["GET"])
+def cfo_executive_brief():
+    return cfo_controller.get_executive_brief()
+
+
+# =====================================================================
+# ROLE 3: AUDITOR / COMPLIANCE OFFICER
+# =====================================================================
+@app.route("/auditor/trail", methods=["GET"])
+@app.route("/api/auditor/trail", methods=["GET"])
+def auditor_trail():
+    return auditor_controller.get_audit_trail()
+
+
+@app.route("/auditor/sla-compliance", methods=["GET"])
+@app.route("/api/auditor/sla-compliance", methods=["GET"])
+def auditor_sla_compliance():
+    return auditor_controller.get_sla_compliance()
+
+
+@app.route("/auditor/hitl-metrics", methods=["GET"])
+@app.route("/api/auditor/hitl-metrics", methods=["GET"])
+def auditor_hitl_metrics():
+    return auditor_controller.get_hitl_metrics()
+
+
+@app.route("/auditor/export", methods=["GET"])
+@app.route("/api/auditor/export", methods=["GET"])
+def auditor_export():
+    return auditor_controller.export_audit_records()
+
 
 if __name__ == "__main__":
     port = int(os.getenv("FLASK_PORT", 5000))

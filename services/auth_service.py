@@ -42,19 +42,24 @@ def init_auth_db():
 
         session = get_session()
         try:
-            # 1. Seed Roles
+            # 1. Seed 4 System Roles
             roles_to_seed = [
-                (0, "admin", "Administrator with full system privileges and escalation authority"),
-                (1, "user", "Standard user with view and record management access"),
+                (0, "admin", "System Administrator - System health, API uptime, AI thresholds, users & logs"),
+                (1, "analyst", "Accountable Owner / Finance Analyst - Action-oriented queue, SLA alerts, AI insights"),
+                (2, "cfo", "Finance Leadership / Executive (CFO) - Strategic KPIs, early warnings, escalated risks"),
+                (3, "auditor", "Auditor / Compliance Officer - Audit trail timeline, SLA compliance, HITL governance"),
             ]
             for role_id, role_name, role_desc in roles_to_seed:
                 existing_role = session.query(Role).filter_by(id=role_id).first()
                 if not existing_role:
                     new_role = Role(id=role_id, name=role_name, description=role_desc)
                     session.add(new_role)
+                else:
+                    existing_role.name = role_name
+                    existing_role.description = role_desc
             session.commit()
 
-            # 2. Seed Default Admin and Standard User
+            # 2. Seed Default Accounts for all 4 roles
             default_users = [
                 {
                     "username": "admin",
@@ -64,11 +69,25 @@ def init_auth_db():
                     "role_id": 0,
                 },
                 {
-                    "username": "user",
-                    "email": "user@fema.local",
-                    "password": "user123",
-                    "full_name": "Finance User",
+                    "username": "analyst",
+                    "email": "analyst@fema.local",
+                    "password": "analyst123",
+                    "full_name": "Finance Analyst (Owner)",
                     "role_id": 1,
+                },
+                {
+                    "username": "cfo",
+                    "email": "cfo@fema.local",
+                    "password": "cfo123",
+                    "full_name": "Chief Financial Officer (Executive)",
+                    "role_id": 2,
+                },
+                {
+                    "username": "auditor",
+                    "email": "auditor@fema.local",
+                    "password": "auditor123",
+                    "full_name": "Internal Compliance Auditor",
+                    "role_id": 3,
                 },
             ]
 
@@ -89,7 +108,7 @@ def init_auth_db():
                     user_obj.set_password(u_data["password"])
                     session.add(user_obj)
             session.commit()
-            print("[AuthService] Roles and default user accounts initialized successfully.")
+            print("[AuthService] 4 roles and default user accounts initialized successfully.")
         except Exception as e:
             session.rollback()
             print(f"[AuthService] Database initialization error: {e}")
@@ -179,8 +198,8 @@ def register_user(data: dict):
     if not username or not email or not password:
         return None, "Username, email, and password are required."
 
-    if role_id not in (0, 1):
-        return None, "Invalid role_id. Must be 0 (admin) or 1 (user)."
+    if role_id not in (0, 1, 2, 3):
+        return None, "Invalid role_id. Must be 0 (Admin), 1 (Analyst), 2 (CFO), or 3 (Auditor)."
 
     session = get_session()
     try:
