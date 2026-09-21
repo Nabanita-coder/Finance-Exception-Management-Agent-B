@@ -16,7 +16,7 @@ import jwt
 from flask import request, jsonify
 
 from dbConnection.db import engine, get_session
-from models.finance_models import Base, Role, User
+from services.finance_models import Base, Role, User
 
 JWT_SECRET = os.getenv("JWT_SECRET", "fema-super-secret-jwt-key-2026-production")
 JWT_ALGORITHM = "HS256"
