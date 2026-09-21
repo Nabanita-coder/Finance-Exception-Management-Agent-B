@@ -210,21 +210,7 @@ def update_exception(exception_id):
         )
         if not rows:
             return jsonify({"error": "Exception case not found"}), 404
-        r = rows[0]
-        updated = {
-            "id": r.get("id"),
-            "financial_record_id": r.get("financial_record_id"),
-            "variance_percent": r.get("variance_percent"),
-            "severity": r.get("severity"),
-            "possible_reason": r.get("possible_reason"),
-            "status": r.get("status"),
-            "owner_id": r.get("owner_id"),
-            "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
-            "escalation_level": r.get("escalation_level"),
-            "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
-        }
-        return jsonify(updated), 200
+        return jsonify(rows[0]), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 
@@ -237,21 +223,7 @@ def escalate_exception(exception_id):
         rows = call_sp("sp_escalate_exception", [exception_id])
         if not rows:
             return jsonify({"error": "Exception case not found"}), 404
-        r = rows[0]
-        escalated = {
-            "id": r.get("id"),
-            "financial_record_id": r.get("financial_record_id"),
-            "variance_percent": r.get("variance_percent"),
-            "severity": r.get("severity"),
-            "possible_reason": r.get("possible_reason"),
-            "status": r.get("status"),
-            "owner_id": r.get("owner_id"),
-            "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
-            "escalation_level": r.get("escalation_level"),
-            "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
-        }
-        return jsonify(escalated), 200
+        return jsonify(rows[0]), 200
     except Exception as error:
         return jsonify({"error": str(error)}), 500
 

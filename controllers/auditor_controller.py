@@ -26,22 +26,7 @@ def get_audit_trail():
 
     try:
         rows = call_sp("sp_get_audit_trail", [dept, action, limit])
-        trail = []
-        for r in rows:
-            trail.append({
-                "id": r.get("id"),
-                "exception_id": r.get("exception_id"),
-                "user_name": r.get("user_name"),
-                "role_name": r.get("role_name"),
-                "action": r.get("action"),
-                "explanation": r.get("explanation"),
-                "previous_status": r.get("previous_status"),
-                "new_status": r.get("new_status"),
-                "is_ai_action": bool(r.get("is_ai_action")),
-                "ip_address": r.get("ip_address"),
-                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            })
-        return jsonify({"success": True, "trail": trail}), 200
+        return jsonify({"success": True, "trail": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

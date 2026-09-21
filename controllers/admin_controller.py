@@ -20,20 +20,7 @@ def get_system_health():
     """
     try:
         rows = call_sp("sp_get_system_health")
-        data = []
-        for r in rows:
-            data.append({
-                "id": r.get("id"),
-                "system_name": r.get("system_name"),
-                "system_type": r.get("system_type"),
-                "status": r.get("status"),
-                "latency_ms": r.get("latency_ms"),
-                "uptime_percent": float(r.get("uptime_percent", 99.9)),
-                "last_sync_at": str(r.get("last_sync_at")) if r.get("last_sync_at") else None,
-                "error_count": r.get("error_count", 0),
-                "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
-            })
-        return jsonify({"success": True, "integrations": data}), 200
+        return jsonify({"success": True, "integrations": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -45,19 +32,7 @@ def get_ai_thresholds():
     """
     try:
         rows = call_sp("sp_get_ai_thresholds")
-        thresholds = []
-        for r in rows:
-            thresholds.append({
-                "id": r.get("id"),
-                "param_key": r.get("param_key"),
-                "param_label": r.get("param_label"),
-                "param_value": r.get("param_value"),
-                "param_type": r.get("param_type"),
-                "description": r.get("description"),
-                "updated_by": r.get("updated_by"),
-                "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
-            })
-        return jsonify({"success": True, "thresholds": thresholds}), 200
+        return jsonify({"success": True, "thresholds": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -94,20 +69,7 @@ def list_users():
     """
     try:
         rows = call_sp("sp_get_users_management")
-        users = []
-        for r in rows:
-            users.append({
-                "id": r.get("id"),
-                "username": r.get("username"),
-                "email": r.get("email"),
-                "full_name": r.get("full_name"),
-                "role_id": r.get("role_id"),
-                "role_name": r.get("role_name"),
-                "role_description": r.get("role_description"),
-                "is_active": bool(r.get("is_active")),
-                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            })
-        return jsonify({"success": True, "users": users}), 200
+        return jsonify({"success": True, "users": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -143,16 +105,6 @@ def get_system_logs():
     """
     try:
         rows = call_sp("sp_get_system_logs")
-        logs = []
-        for r in rows:
-            logs.append({
-                "id": r.get("id"),
-                "log_level": r.get("log_level"),
-                "source": r.get("source"),
-                "message": r.get("message"),
-                "details": r.get("details"),
-                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            })
-        return jsonify({"success": True, "logs": logs}), 200
+        return jsonify({"success": True, "logs": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500

@@ -68,16 +68,7 @@ def get_early_warnings():
     """
     try:
         rows = call_sp("sp_get_early_warnings")
-        warnings = []
-        for r in rows:
-            warnings.append({
-                "title": r.get("warning_title"),
-                "risk_level": r.get("risk_level"),
-                "description": r.get("description"),
-                "impacted_area": r.get("impacted_area"),
-                "review_deadline": str(r.get("review_deadline")),
-            })
-        return jsonify({"success": True, "warnings": warnings}), 200
+        return jsonify({"success": True, "warnings": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -89,26 +80,7 @@ def get_escalated_risks():
     """
     try:
         rows = call_sp("sp_get_escalated_risks")
-        risks = []
-        for r in rows:
-            risks.append({
-                "id": r.get("id"),
-                "financial_record_id": r.get("financial_record_id"),
-                "category": r.get("category"),
-                "department": r.get("department"),
-                "period": r.get("period"),
-                "budget_amount": float(r.get("budget_amount", 0)),
-                "actual_amount": float(r.get("actual_amount", 0)),
-                "variance_amount": float(r.get("variance_amount", 0)),
-                "variance_percent": float(r.get("variance_percent", 0)),
-                "severity": r.get("severity"),
-                "possible_reason": r.get("possible_reason"),
-                "status": r.get("status"),
-                "escalation_level": r.get("escalation_level", 1),
-                "owner_name": r.get("owner_name"),
-                "updated_at": str(r.get("updated_at")) if r.get("updated_at") else None,
-            })
-        return jsonify({"success": True, "risks": risks}), 200
+        return jsonify({"success": True, "risks": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 

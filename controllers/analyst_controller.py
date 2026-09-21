@@ -21,30 +21,7 @@ def get_my_tasks():
     user_id = request.args.get("user_id", 1, type=int)
     try:
         rows = call_sp("sp_get_analyst_tasks", [user_id])
-        tasks = []
-        for r in rows:
-            tasks.append({
-                "id": r.get("id"),
-                "financial_record_id": r.get("financial_record_id"),
-                "category": r.get("category"),
-                "period": r.get("period"),
-                "department": r.get("department"),
-                "budget_amount": float(r.get("budget_amount", 0)),
-                "actual_amount": float(r.get("actual_amount", 0)),
-                "variance_amount": float(r.get("variance_amount", 0)),
-                "variance_percent": float(r.get("variance_percent", 0)),
-                "severity": r.get("severity"),
-                "possible_reason": r.get("possible_reason"),
-                "status": r.get("status"),
-                "owner_id": r.get("owner_id"),
-                "owner_name": r.get("owner_name"),
-                "owner_role": r.get("owner_role"),
-                "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
-                "sla_remaining_minutes": r.get("sla_remaining_minutes"),
-                "escalation_level": r.get("escalation_level", 0),
-                "created_at": str(r.get("created_at")) if r.get("created_at") else None,
-            })
-        return jsonify({"success": True, "tasks": tasks}), 200
+        return jsonify({"success": True, "tasks": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
@@ -56,20 +33,7 @@ def get_sla_alerts():
     """
     try:
         rows = call_sp("sp_get_analyst_sla_alerts")
-        alerts = []
-        for r in rows:
-            alerts.append({
-                "id": r.get("id"),
-                "severity": r.get("severity"),
-                "department": r.get("department"),
-                "category": r.get("category"),
-                "variance_percent": float(r.get("variance_percent", 0)),
-                "status": r.get("status"),
-                "sla_deadline": str(r.get("sla_deadline")) if r.get("sla_deadline") else None,
-                "sla_remaining_minutes": r.get("sla_remaining_minutes"),
-                "sla_status": r.get("sla_status"),
-            })
-        return jsonify({"success": True, "alerts": alerts}), 200
+        return jsonify({"success": True, "alerts": rows}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
