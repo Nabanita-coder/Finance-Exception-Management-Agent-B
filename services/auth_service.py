@@ -42,11 +42,12 @@ def init_auth_db():
 
         session = get_session()
         try:
-            # 1. Seed 3 System Roles (Option A: Consolidated Admin & Compliance)
+            # 1. Seed 4 System Roles
             roles_to_seed = [
                 (0, "admin", "Admin & Compliance Officer - System health, API uptime, AI thresholds, audit trail & SOX 404"),
                 (1, "analyst", "Finance Analyst (Owner) - Action-oriented queue, SLA alerts, AI insights & resolution"),
                 (2, "cfo", "Finance Leadership / CFO - Strategic KPIs, early warnings, escalated risk overrides & brief"),
+                (3, "auditor", "Compliance Auditor - Governance matrix, audit trail, SOX compliance & exports"),
             ]
             for role_id, role_name, role_desc in roles_to_seed:
                 existing_role = session.query(Role).filter_by(id=role_id).first()
@@ -58,7 +59,7 @@ def init_auth_db():
                     existing_role.description = role_desc
             session.commit()
 
-            # 2. Seed Default Accounts for consolidated 3 roles
+            # 2. Seed Default Accounts for all 4 roles
             default_users = [
                 {
                     "username": "admin",
@@ -86,7 +87,7 @@ def init_auth_db():
                     "email": "auditor@fema.local",
                     "password": "auditor123",
                     "full_name": "Compliance Auditor (Admin Tier)",
-                    "role_id": 0,
+                    "role_id": 3,
                 },
             ]
 
@@ -106,6 +107,12 @@ def init_auth_db():
                     )
                     user_obj.set_password(u_data["password"])
                     session.add(user_obj)
+                else:
+                    existing_user.email = u_data["email"]
+                    existing_user.role_id = u_data["role_id"]
+                    existing_user.full_name = u_data["full_name"]
+                    existing_user.is_active = 1
+                    existing_user.set_password(u_data["password"])
             session.commit()
             print("[AuthService] 4 roles and default user accounts initialized successfully.")
         except Exception as e:
