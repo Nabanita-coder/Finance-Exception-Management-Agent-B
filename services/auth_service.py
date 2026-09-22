@@ -42,12 +42,11 @@ def init_auth_db():
 
         session = get_session()
         try:
-            # 1. Seed 4 System Roles
+            # 1. Seed 3 System Roles (Option A: Consolidated Admin & Compliance)
             roles_to_seed = [
-                (0, "admin", "System Administrator - System health, API uptime, AI thresholds, users & logs"),
-                (1, "analyst", "Accountable Owner / Finance Analyst - Action-oriented queue, SLA alerts, AI insights"),
-                (2, "cfo", "Finance Leadership / Executive (CFO) - Strategic KPIs, early warnings, escalated risks"),
-                (3, "auditor", "Auditor / Compliance Officer - Audit trail timeline, SLA compliance, HITL governance"),
+                (0, "admin", "Admin & Compliance Officer - System health, API uptime, AI thresholds, audit trail & SOX 404"),
+                (1, "analyst", "Finance Analyst (Owner) - Action-oriented queue, SLA alerts, AI insights & resolution"),
+                (2, "cfo", "Finance Leadership / CFO - Strategic KPIs, early warnings, escalated risk overrides & brief"),
             ]
             for role_id, role_name, role_desc in roles_to_seed:
                 existing_role = session.query(Role).filter_by(id=role_id).first()
@@ -59,13 +58,13 @@ def init_auth_db():
                     existing_role.description = role_desc
             session.commit()
 
-            # 2. Seed Default Accounts for all 4 roles
+            # 2. Seed Default Accounts for consolidated 3 roles
             default_users = [
                 {
                     "username": "admin",
                     "email": "admin@fema.local",
                     "password": "admin123",
-                    "full_name": "System Administrator",
+                    "full_name": "Admin & Compliance Officer",
                     "role_id": 0,
                 },
                 {
@@ -86,8 +85,8 @@ def init_auth_db():
                     "username": "auditor",
                     "email": "auditor@fema.local",
                     "password": "auditor123",
-                    "full_name": "Internal Compliance Auditor",
-                    "role_id": 3,
+                    "full_name": "Compliance Auditor (Admin Tier)",
+                    "role_id": 0,
                 },
             ]
 
@@ -198,8 +197,8 @@ def register_user(data: dict):
     if not username or not email or not password:
         return None, "Username, email, and password are required."
 
-    if role_id not in (0, 1, 2, 3):
-        return None, "Invalid role_id. Must be 0 (Admin), 1 (Analyst), 2 (CFO), or 3 (Auditor)."
+    if role_id not in (0, 1, 2):
+        return None, "Invalid role_id. Must be 0 (Admin & Compliance), 1 (Finance Analyst), or 2 (CFO)."
 
     session = get_session()
     try:

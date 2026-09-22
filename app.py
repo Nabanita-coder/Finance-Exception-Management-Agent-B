@@ -12,7 +12,7 @@ from controllers import (
     cfo_controller,
     auditor_controller,
 )
-from services import auth_service
+from services import auth_service, finance_service
 
 # Load .env variables (DB_HOST, DB_PASSWORD, ANTHROPIC_API_KEY, etc.)
 load_dotenv()
@@ -20,12 +20,13 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
-# Ensure roles and users tables & initial seed accounts are initialized
+# Ensure roles, users, and dynamic AI thresholds tables & seed data are initialized
 with app.app_context():
     try:
         auth_service.init_auth_db()
+        finance_service.init_thresholds_db()
     except Exception as _e:
-        print(f"Warning: Could not initialize auth DB on startup: {_e}")
+        print(f"Warning: Could not initialize DB on startup: {_e}")
 
 
 # =====================================================================

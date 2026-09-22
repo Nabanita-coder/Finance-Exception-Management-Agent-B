@@ -15,52 +15,175 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-from dbConnection.db import get_session
-from services.finance_models import FinancialRecord, Owner, ExceptionCase
+from dbConnection.db import engine, get_session
+from services.finance_models import Base, FinancialRecord, Owner, ExceptionCase, SystemThreshold
 
 load_dotenv()
 
 # =====================================================================
-# CONFIGURATION (easy to tweak without touching the logic below)
+# DYNAMIC THRESHOLDS & RULE ENGINE (Loaded from MySQL DB)
 # =====================================================================
 
-# Severity is decided using the ABSOLUTE variance percentage.
-# <10% -> LOW, 10-20% -> MEDIUM, 20-30% -> HIGH, >30% -> CRITICAL
-SEVERITY_RULES = [
-    (10, "LOW"),
-    (20, "MEDIUM"),
-    (30, "HIGH"),
+DEFAULT_THRESHOLDS = [
+    {
+        "param_key": "variance_trigger_pct",
+        "param_label": "Minimum Variance Trigger (%)",
+        "param_value": "10.0",
+        "param_type": "float",
+        "description": "Minimum absolute variance % required to create an exception case.",
+    },
+    {
+        "param_key": "severity_medium_threshold",
+        "param_label": "Medium Severity Threshold (%)",
+        "param_value": "20.0",
+        "param_type": "float",
+        "description": "Variance percentage threshold below which severity is MEDIUM.",
+    },
+    {
+        "param_key": "severity_high_threshold",
+        "param_label": "High Severity Threshold (%)",
+        "param_value": "30.0",
+        "param_type": "float",
+        "description": "Variance percentage threshold below which severity is HIGH (above is CRITICAL).",
+    },
+    {
+        "param_key": "sla_days_critical",
+        "param_label": "CRITICAL SLA Resolution (Days)",
+        "param_value": "1",
+        "param_type": "int",
+        "description": "Allowed business days to remediate a CRITICAL exception.",
+    },
+    {
+        "param_key": "sla_days_high",
+        "param_label": "HIGH SLA Resolution (Days)",
+        "param_value": "3",
+        "param_type": "int",
+        "description": "Allowed business days to remediate a HIGH exception.",
+    },
+    {
+        "param_key": "sla_days_medium",
+        "param_label": "MEDIUM SLA Resolution (Days)",
+        "param_value": "5",
+        "param_type": "int",
+        "description": "Allowed business days to remediate a MEDIUM exception.",
+    },
+    {
+        "param_key": "sla_days_low",
+        "param_label": "LOW SLA Resolution (Days)",
+        "param_value": "7",
+        "param_type": "int",
+        "description": "Allowed business days to remediate a LOW exception.",
+    },
+    {
+        "param_key": "min_level_critical",
+        "param_label": "CRITICAL Minimum Owner Level",
+        "param_value": "3",
+        "param_type": "int",
+        "description": "Minimum seniority level for CRITICAL exceptions (3 = Senior Finance Manager).",
+    },
+    {
+        "param_key": "min_level_high",
+        "param_label": "HIGH Minimum Owner Level",
+        "param_value": "2",
+        "param_type": "int",
+        "description": "Minimum seniority level for HIGH exceptions (2 = Finance Manager).",
+    },
+    {
+        "param_key": "min_level_medium_low",
+        "param_label": "MEDIUM & LOW Minimum Owner Level",
+        "param_value": "1",
+        "param_type": "int",
+        "description": "Minimum seniority level for MEDIUM & LOW exceptions (1 = Finance Executive).",
+    },
 ]
-DEFAULT_SEVERITY = "CRITICAL"  # used when variance is above every rule above
 
-# How many days an owner has to fix an exception, based on severity.
-SLA_DAYS = {
-    "LOW": 7,
-    "MEDIUM": 5,
-    "HIGH": 3,
-    "CRITICAL": 1,
-}
 
-# Minimum level of seniority required based on severity:
-# LOW / MEDIUM -> Level 1 (Finance Executive+)
-# HIGH -> Level 2 (Finance Manager+)
-# CRITICAL -> Level 3 (Senior Finance Manager+)
-SEVERITY_MIN_LEVEL = {
-    "LOW": 1,
-    "MEDIUM": 1,
-    "HIGH": 2,
-    "CRITICAL": 3,
-}
+def init_thresholds_db():
+    """Ensures ai_thresholds table exists and seeds initial parameters if missing."""
+    try:
+        Base.metadata.create_all(bind=engine, tables=[SystemThreshold.__table__])
+        session = get_session()
+        try:
+            for item in DEFAULT_THRESHOLDS:
+                existing = session.query(SystemThreshold).filter_by(param_key=item["param_key"]).first()
+                if not existing:
+                    new_param = SystemThreshold(
+                        param_key=item["param_key"],
+                        param_label=item["param_label"],
+                        param_value=item["param_value"],
+                        param_type=item["param_type"],
+                        description=item["description"],
+                        updated_by="system",
+                    )
+                    session.add(new_param)
+            session.commit()
+        except Exception as err:
+            session.rollback()
+            print(f"[init_thresholds_db] Seeding error: {err}")
+        finally:
+            session.close()
+    except Exception as err:
+        print(f"[init_thresholds_db] Table create warning: {err}")
 
-# Simple, rule-based "why did this happen" explanations.
-# Key = (category, direction), Value = plain-English possible reason.
-ROOT_CAUSE_RULES = {
-    ("Revenue", "decrease"): "Possible drop in sales, lost customers, delayed customer payments, or a slow market.",
-    ("Revenue", "increase"): "Possible higher sales, new customers won, or a one-time bulk order.",
-    ("Expense", "increase"): "Possible cost overrun, unplanned purchases, price hikes from vendors, or inefficiency.",
-    ("Expense", "decrease"): "Possible cost-saving measures, delayed spending, or under-utilised budget.",
-}
-DEFAULT_ROOT_CAUSE = "Reason not clear from simple rules -- needs manual review by the assigned owner."
+
+def get_dynamic_thresholds(session=None) -> dict:
+    """
+    Dynamically loads detection and SLA parameters from MySQL DB.
+    Falls back to safe defaults if table is unavailable.
+    """
+    close_session = False
+    if session is None:
+        session = get_session()
+        close_session = True
+
+    params_dict = {}
+    try:
+        rows = session.query(SystemThreshold).all()
+        for r in rows:
+            params_dict[r.param_key] = r.param_value
+    except Exception as err:
+        print(f"[get_dynamic_thresholds] Falling back to default thresholds: {err}")
+    finally:
+        if close_session:
+            session.close()
+
+    def _get_float(key, default):
+        try:
+            return float(params_dict.get(key, default))
+        except (ValueError, TypeError):
+            return default
+
+    def _get_int(key, default):
+        try:
+            return int(float(params_dict.get(key, default)))
+        except (ValueError, TypeError):
+            return default
+
+    variance_trigger = _get_float("variance_trigger_pct", 10.0)
+    medium_th = _get_float("severity_medium_threshold", 20.0)
+    high_th = _get_float("severity_high_threshold", 30.0)
+
+    sla_days = {
+        "CRITICAL": _get_int("sla_days_critical", 1),
+        "HIGH": _get_int("sla_days_high", 3),
+        "MEDIUM": _get_int("sla_days_medium", 5),
+        "LOW": _get_int("sla_days_low", 7),
+    }
+
+    min_levels = {
+        "CRITICAL": _get_int("min_level_critical", 3),
+        "HIGH": _get_int("min_level_high", 2),
+        "MEDIUM": _get_int("min_level_medium_low", 1),
+        "LOW": _get_int("min_level_medium_low", 1),
+    }
+
+    return {
+        "variance_trigger": variance_trigger,
+        "medium_threshold": medium_th,
+        "high_threshold": high_th,
+        "sla_days": sla_days,
+        "min_levels": min_levels,
+    }
 
 
 # =====================================================================
@@ -77,30 +200,72 @@ def calculate_variance(budget_amount: float, actual_amount: float) -> float:
 
 
 # =====================================================================
-# STEP: SEVERITY CLASSIFICATION
+# STEP: SEVERITY CLASSIFICATION (Dynamic from DB Thresholds)
 # =====================================================================
-def classify_severity(variance_percent: float) -> str:
+def classify_severity(variance_percent: float, thresholds: dict = None) -> str:
     """
-    Looks at the SIZE of the variance (ignoring +/- sign) and decides
-    how serious it is, using the SEVERITY_RULES table above.
+    Dynamically decides severity based on configured DB thresholds:
+    < medium_th -> LOW
+    < high_th -> MEDIUM
+    >= high_th -> CRITICAL (or HIGH if intermediate)
     """
+    if thresholds is None:
+        thresholds = get_dynamic_thresholds()
+
     magnitude = abs(variance_percent)
-    for threshold, severity in SEVERITY_RULES:
-        if magnitude < threshold:
-            return severity
-    return DEFAULT_SEVERITY
+    medium_th = thresholds.get("medium_threshold", 20.0)
+    high_th = thresholds.get("high_threshold", 30.0)
+
+    if magnitude < medium_th:
+        return "LOW"
+    elif magnitude < high_th:
+        return "HIGH" if (magnitude >= (medium_th + high_th) / 2) else "MEDIUM"
+    else:
+        return "CRITICAL"
 
 
 # =====================================================================
-# STEP: ROOT CAUSE ANALYSIS
+# STEP: ROOT CAUSE ANALYSIS (100% Dynamic for ANY Category & Department)
 # =====================================================================
 def determine_root_cause(category: str, budget_amount: float, actual_amount: float,
-                          variance_percent: float) -> str:
+                          variance_percent: float, department: str = None) -> str:
     """
-    Rule-based first guess at "why did this happen".
+    Dynamic, context-aware root cause generator supporting ANY financial category:
+    (Revenue, Sales, Expense, CapEx, OpEx, COGS, Payroll, Cloud, Marketing, etc.)
     """
-    direction = "decrease" if actual_amount < budget_amount else "increase"
-    base_reason = ROOT_CAUSE_RULES.get((category, direction), DEFAULT_ROOT_CAUSE)
+    direction = "under-budget / lower" if actual_amount < budget_amount else "over-budget / higher"
+    cat_lower = (category or "").lower()
+    dept_label = f" in {department}" if department else ""
+
+    # Determine if category is typically inflow (income) or outflow (cost)
+    is_inflow = any(w in cat_lower for w in ["rev", "sale", "income", "turnover", "billing", "receipt"])
+    
+    if is_inflow:
+        if actual_amount < budget_amount:
+            base_reason = f"Shortfall in {category}{dept_label} ({variance_percent:.1f}% below target): Likely client contract delay, deferred bookings, customer churn, or seasonal downturn."
+        else:
+            base_reason = f"Surplus in {category}{dept_label} (+{variance_percent:.1f}% above budget): Acceleration in closed deals, higher transaction volume, or one-off renewal expansion."
+    elif any(w in cat_lower for w in ["cogs", "cost of goods", "inventory", "procurement"]):
+        if actual_amount > budget_amount:
+            base_reason = f"Cost inflation in {category}{dept_label} (+{variance_percent:.1f}% overrun): Raw material price surge, expediting freight fees, or unexpected supply chain tariff."
+        else:
+            base_reason = f"Favorable variance in {category}{dept_label} ({variance_percent:.1f}% below budget): Vendor discount realization or lower production run volumes."
+    elif any(w in cat_lower for w in ["payroll", "salary", "comp", "benefit", "talent"]):
+        if actual_amount > budget_amount:
+            base_reason = f"Headcount / compensation variance in {category}{dept_label} (+{variance_percent:.1f}% overrun): Unplanned overtime, contractor surge, or off-cycle severance."
+        else:
+            base_reason = f"Hiring lag in {category}{dept_label} ({variance_percent:.1f}% below budget): Open positions unfilled or delayed start dates for budgeted requisitions."
+    elif any(w in cat_lower for w in ["capex", "capital", "asset", "equipment", "hardware"]):
+        if actual_amount > budget_amount:
+            base_reason = f"CapEx escalation in {category}{dept_label} (+{variance_percent:.1f}% overrun): Accelerated infrastructure procurement, server hardware upgrades, or building build-out expenses."
+        else:
+            base_reason = f"Deferred capital project in {category}{dept_label} ({variance_percent:.1f}% under budget): Phased milestone delay or capital asset freeze."
+    else:
+        # General Expense / Other Categories
+        if actual_amount > budget_amount:
+            base_reason = f"Expenditure surge in {category}{dept_label} (+{variance_percent:.1f}% overrun): Unbudgeted departmental spend, vendor rate revision, or accelerated campaign execution."
+        else:
+            base_reason = f"Favorable expenditure in {category}{dept_label} ({variance_percent:.1f}% under budget): Operational belt-tightening or delayed vendor billing."
 
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key or api_key == "your_anthropic_api_key_here":
@@ -111,14 +276,15 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
         client = anthropic.Anthropic(api_key=api_key)
         model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
         prompt = (
-            "You are a careful finance assistant. Using ONLY the numbers below, "
-            "write ONE short sentence (max 25 words) suggesting a plausible reason "
-            "for this variance. Do not invent company facts you were not given.\n\n"
+            "You are a careful enterprise finance assistant. Using ONLY the data below, "
+            "write ONE short, crisp sentence (max 25 words) proposing a plausible executive reason "
+            "for this variance. Do not invent unstated facts.\n\n"
             f"Category: {category}\n"
-            f"Budget Amount: {budget_amount}\n"
-            f"Actual Amount: {actual_amount}\n"
-            f"Variance: {variance_percent:.2f}%\n"
-            f"Rule-based hint: {base_reason}\n"
+            f"Department: {department or 'General'}\n"
+            f"Budget: {budget_amount:,.2f}\n"
+            f"Actual: {actual_amount:,.2f}\n"
+            f"Variance: {variance_percent:+.2f}%\n"
+            f"Rule-based hypothesis: {base_reason}\n"
         )
         response = client.messages.create(
             model=model,
@@ -129,7 +295,7 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
             block.text for block in response.content if hasattr(block, "text")
         ).strip()
         if llm_text:
-            return f"{base_reason} (AI note: {llm_text})"
+            return f"{base_reason} (AI Note: {llm_text})"
     except Exception as error:
         print(f"[determine_root_cause] LLM enrichment skipped: {error}")
 
@@ -137,17 +303,20 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
 
 
 # =====================================================================
-# STEP: OWNER ASSIGNMENT (100% Dynamic Engine)
+# STEP: OWNER ASSIGNMENT (100% Dynamic Engine from DB)
 # =====================================================================
-def assign_owner(session, severity: str, department: str = None) -> Owner:
+def assign_owner(session, severity: str, department: str = None, thresholds: dict = None) -> Owner:
     """
     100% Dynamic, Zero-Hardcoded Owner Assignment:
-    1. Determines minimum seniority level required from severity.
+    1. Determines minimum seniority level required from dynamic DB thresholds.
     2. Filters active owners matching the record's department (or 'All' / 'General Finance').
     3. If no department match, falls back to any qualified active owner.
     4. Applies Workload Balancing: picks candidate with the LOWEST active case count.
     """
-    min_level = SEVERITY_MIN_LEVEL.get(severity, 1)
+    if thresholds is None:
+        thresholds = get_dynamic_thresholds(session)
+
+    min_level = thresholds["min_levels"].get(severity, 1)
 
     # Base candidate pool: active owners meeting minimum level
     candidates = (
@@ -205,11 +374,14 @@ def assign_owner(session, severity: str, department: str = None) -> Owner:
 
 
 # =====================================================================
-# STEP: SLA TRACKING
+# STEP: SLA TRACKING (Dynamic from DB Thresholds)
 # =====================================================================
-def calculate_sla_deadline(severity: str) -> datetime:
-    """Returns the datetime by which this case must be resolved."""
-    days = SLA_DAYS.get(severity, 5)
+def calculate_sla_deadline(severity: str, thresholds: dict = None) -> datetime:
+    """Returns the datetime by which this case must be resolved using dynamic DB days."""
+    if thresholds is None:
+        thresholds = get_dynamic_thresholds()
+
+    days = thresholds["sla_days"].get(severity, 5)
     return datetime.utcnow() + timedelta(days=days)
 
 
@@ -265,19 +437,22 @@ def run_monitoring() -> dict:
             .all()
         )
 
+        thresholds = get_dynamic_thresholds(session)
+        trigger_pct = thresholds.get("variance_trigger", 10.0)
+
         created = []
         for record in unprocessed:
             variance = calculate_variance(record.budget_amount, record.actual_amount)
 
-            if abs(variance) < 10:
+            if abs(variance) < trigger_pct:
                 continue
 
-            severity = classify_severity(variance)
+            severity = classify_severity(variance, thresholds)
             reason = determine_root_cause(
-                record.category, record.budget_amount, record.actual_amount, variance
+                record.category, record.budget_amount, record.actual_amount, variance, department=record.department
             )
-            owner = assign_owner(session, severity, department=record.department)
-            deadline = calculate_sla_deadline(severity)
+            owner = assign_owner(session, severity, department=record.department, thresholds=thresholds)
+            deadline = calculate_sla_deadline(severity, thresholds)
 
             new_case = ExceptionCase(
                 financial_record_id=record.id,

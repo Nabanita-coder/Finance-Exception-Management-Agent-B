@@ -58,10 +58,11 @@ CREATE TABLE IF NOT EXISTS roles (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- Initial Roles
+-- Initial Roles (Option A: Consolidated 3 Roles)
 INSERT IGNORE INTO roles (id, name, description) VALUES
-    (0, 'admin', 'Administrator with full system privileges and case escalation authority'),
-    (1, 'user', 'Standard user with view and basic management access');
+    (0, 'admin', 'Admin & Compliance Officer - System health, AI thresholds, audit trail & SOX 404'),
+    (1, 'analyst', 'Finance Analyst - Action-oriented queue, SLA alerts, AI insights & resolution'),
+    (2, 'cfo', 'Finance Leadership / CFO - Strategic KPIs, early warnings, escalated risks');
 
 -- Table 5: Users (application users with role-based access)
 CREATE TABLE IF NOT EXISTS users (
@@ -82,6 +83,30 @@ INSERT IGNORE INTO owners (id, name, email, role, level) VALUES
     (2, 'Rohit Sharma', 'rohit@company.com', 'Finance Manager', 2),
     (3, 'Neha Kapoor', 'neha@company.com', 'Senior Finance Manager', 3),
     (4, 'CFO Office', 'cfo@company.com', 'CFO', 4);
+
+-- Table 6: AI Detection & System Thresholds (Dynamic Rules Engine)
+CREATE TABLE IF NOT EXISTS ai_thresholds (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    param_key VARCHAR(80) NOT NULL UNIQUE,
+    param_label VARCHAR(120) NOT NULL,
+    param_value VARCHAR(100) NOT NULL,
+    param_type VARCHAR(30) DEFAULT 'float',
+    description VARCHAR(255),
+    updated_by VARCHAR(80) DEFAULT 'system',
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+INSERT IGNORE INTO ai_thresholds (param_key, param_label, param_value, param_type, description) VALUES
+    ('variance_trigger_pct', 'Minimum Variance Trigger (%)', '10.0', 'float', 'Minimum absolute variance % required to create an exception case.'),
+    ('severity_medium_threshold', 'Medium Severity Threshold (%)', '20.0', 'float', 'Variance percentage threshold below which severity is MEDIUM.'),
+    ('severity_high_threshold', 'High Severity Threshold (%)', '30.0', 'float', 'Variance percentage threshold below which severity is HIGH (above is CRITICAL).'),
+    ('sla_days_critical', 'CRITICAL SLA Resolution (Days)', '1', 'int', 'Allowed business days to remediate a CRITICAL exception.'),
+    ('sla_days_high', 'HIGH SLA Resolution (Days)', '3', 'int', 'Allowed business days to remediate a HIGH exception.'),
+    ('sla_days_medium', 'MEDIUM SLA Resolution (Days)', '5', 'int', 'Allowed business days to remediate a MEDIUM exception.'),
+    ('sla_days_low', 'LOW SLA Resolution (Days)', '7', 'int', 'Allowed business days to remediate a LOW exception.'),
+    ('min_level_critical', 'CRITICAL Minimum Owner Level', '3', 'int', 'Minimum seniority level for CRITICAL exceptions (3 = Senior Finance Manager).'),
+    ('min_level_high', 'HIGH Minimum Owner Level', '2', 'int', 'Minimum seniority level for HIGH exceptions (2 = Finance Manager).'),
+    ('min_level_medium_low', 'MEDIUM & LOW Minimum Owner Level', '1', 'int', 'Minimum seniority level for MEDIUM & LOW exceptions (1 = Finance Executive).');
 
 -- ============================================================
 -- STORED PROCEDURES

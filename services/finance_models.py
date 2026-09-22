@@ -167,3 +167,31 @@ class User(Base):
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# =========================================================
+# TABLE 6: AI Detection & System Thresholds (Dynamic Rules)
+# =========================================================
+class SystemThreshold(Base):
+    __tablename__ = "ai_thresholds"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    param_key = Column(String(80), unique=True, nullable=False, index=True)
+    param_label = Column(String(120), nullable=False)
+    param_value = Column(String(100), nullable=False)
+    param_type = Column(String(30), default="float")  # float, int, string, json
+    description = Column(String(255), nullable=True)
+    updated_by = Column(String(80), default="system")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "param_key": self.param_key,
+            "param_label": self.param_label,
+            "param_value": self.param_value,
+            "param_type": self.param_type,
+            "description": self.description,
+            "updated_by": self.updated_by,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
