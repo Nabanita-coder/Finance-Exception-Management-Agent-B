@@ -18,3 +18,4 @@ flask
 sqlalchemy
 pymysql
 python-dotenv
+requests

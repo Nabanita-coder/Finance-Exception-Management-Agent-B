@@ -293,7 +293,40 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
         else:
             base_reason = f"Favorable expenditure in {category}{dept_label} ({variance_percent:.1f}% under budget): Operational belt-tightening or delayed vendor billing."
 
+    import requests
+    mistral_url = os.getenv("MISTRAL_LOCAL_URL")
+    mistral_model = os.getenv("MISTRAL_MODEL", "mistral:local")
     api_key = os.getenv("ANTHROPIC_API_KEY")
+
+    prompt = (
+        "You are a careful enterprise finance assistant. Using ONLY the data below, "
+        "write ONE short, crisp sentence (max 25 words) proposing a plausible executive reason "
+        "for this variance. Do not invent unstated facts.\n\n"
+        f"Category: {category}\n"
+        f"Department: {department or 'General'}\n"
+        f"Budget: {budget_amount:,.2f}\n"
+        f"Actual: {actual_amount:,.2f}\n"
+        f"Variance: {variance_percent:+.2f}%\n"
+        f"Rule-based hypothesis: {base_reason}\n"
+    )
+
+    if mistral_url:
+        try:
+            res = requests.post(
+                f"{mistral_url}/api/generate",
+                json={
+                    "model": mistral_model,
+                    "prompt": prompt,
+                    "stream": False
+                },
+                timeout=120
+            )
+            res.raise_for_status()
+            return res.json().get("response", base_reason).strip()
+        except Exception as e:
+            print(f"[Mistral Error in root_cause]: {e}")
+            return base_reason
+            
     if not api_key or api_key == "your_anthropic_api_key_here":
         return base_reason
 
@@ -301,17 +334,6 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-        prompt = (
-            "You are a careful enterprise finance assistant. Using ONLY the data below, "
-            "write ONE short, crisp sentence (max 25 words) proposing a plausible executive reason "
-            "for this variance. Do not invent unstated facts.\n\n"
-            f"Category: {category}\n"
-            f"Department: {department or 'General'}\n"
-            f"Budget: {budget_amount:,.2f}\n"
-            f"Actual: {actual_amount:,.2f}\n"
-            f"Variance: {variance_percent:+.2f}%\n"
-            f"Rule-based hypothesis: {base_reason}\n"
-        )
         response = client.messages.create(
             model=model,
             max_tokens=100,
@@ -319,13 +341,11 @@ def determine_root_cause(category: str, budget_amount: float, actual_amount: flo
         )
         llm_text = "".join(
             block.text for block in response.content if hasattr(block, "text")
-        ).strip()
-        if llm_text:
-            return f"{base_reason} (AI Note: {llm_text})"
-    except Exception as error:
-        print(f"[determine_root_cause] LLM enrichment skipped: {error}")
-
-    return base_reason
+        )
+        return llm_text.strip()
+    except Exception as e:
+        print(f"[Anthropic LLM Error]: {e}")
+        return base_reason
 
 
 # =====================================================================
@@ -737,28 +757,56 @@ def chat_with_rag(question: str) -> dict:
 
     context_text = "\n".join(f"- {doc}" for doc in retrieved_docs)
 
+    import requests
+    mistral_url = os.getenv("MISTRAL_LOCAL_URL")
+    mistral_model = os.getenv("MISTRAL_MODEL", "mistral:local")
     api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key or api_key == "your_anthropic_api_key_here":
+
+    if not mistral_url and (not api_key or api_key == "your_anthropic_api_key_here"):
         return {
             "answer": (
-                "(No LLM key configured, showing raw matching FEMA data instead.)\n"
+                "(No LLM configured, showing raw matching FEMA data instead.)\n"
                 + context_text
             ),
             "sources": retrieved_ids,
         }
 
+    system_prompt = (
+        "You are FEMA's finance assistant. Answer the user's question using "
+        "ONLY the FEMA context provided below. Never invent numbers or facts "
+        "that are not in the context. If the context does not contain the "
+        "answer, reply exactly: 'This information was not found in FEMA data.'"
+    )
+    user_prompt = f"FEMA Context:\n{context_text}\n\nQuestion: {question}"
+
+    if mistral_url:
+        try:
+            res = requests.post(
+                f"{mistral_url}/api/generate",
+                json={
+                    "model": mistral_model,
+                    "prompt": f"{system_prompt}\n\n{user_prompt}",
+                    "stream": False
+                },
+                timeout=120
+            )
+            res.raise_for_status()
+            answer_text = res.json().get("response", "").strip()
+            return {
+                "answer": answer_text,
+                "sources": retrieved_ids,
+            }
+        except Exception as e:
+            print(f"[Mistral Error in chat_with_rag]: {e}")
+            return {
+                "answer": f"(Mistral API Error: {e})\n" + context_text,
+                "sources": retrieved_ids,
+            }
+
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=api_key)
         model = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
-
-        system_prompt = (
-            "You are FEMA's finance assistant. Answer the user's question using "
-            "ONLY the FEMA context provided below. Never invent numbers or facts "
-            "that are not in the context. If the context does not contain the "
-            "answer, reply exactly: 'This information was not found in FEMA data.'"
-        )
-        user_prompt = f"FEMA Context:\n{context_text}\n\nQuestion: {question}"
 
         response = client.messages.create(
             model=model,
@@ -768,16 +816,15 @@ def chat_with_rag(question: str) -> dict:
         )
         answer_text = "".join(
             block.text for block in response.content if hasattr(block, "text")
-        ).strip()
-
-        return {"answer": answer_text or "This information was not found in FEMA data.",
-                "sources": retrieved_ids}
-    except Exception as error:
+        )
         return {
-            "answer": (
-                f"(LLM call failed: {error}). Showing raw matching FEMA data instead.\n"
-                + context_text
-            ),
+            "answer": answer_text,
+            "sources": retrieved_ids,
+        }
+    except Exception as e:
+        print(f"[Anthropic Error in chat_with_rag]: {e}")
+        return {
+            "answer": f"(Anthropic API Error: {e})\n" + context_text,
             "sources": retrieved_ids,
         }
 
