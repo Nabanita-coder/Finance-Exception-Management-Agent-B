@@ -775,7 +775,8 @@ def chat_with_rag(question: str) -> dict:
         "You are FEMA's finance assistant. Answer the user's question using "
         "ONLY the FEMA context provided below. Never invent numbers or facts "
         "that are not in the context. If the context does not contain the "
-        "answer, reply exactly: 'This information was not found in FEMA data.'"
+        "answer, reply exactly: 'This information was not found in FEMA data.' "
+        "DO NOT list or mention the source names or references (like record_1, exception_2) in your final response."
     )
     user_prompt = f"FEMA Context:\n{context_text}\n\nQuestion: {question}"
 
@@ -792,6 +793,11 @@ def chat_with_rag(question: str) -> dict:
             )
             res.raise_for_status()
             answer_text = res.json().get("response", "").strip()
+            # Post-process to remove any hallucinated "Sources:" block, handling markdown bold tags
+            for source_str in ["\n**Sources:**", "\n**Source:**", "\nSources:", "\nSource:", "\n**Sources**", "\nSources"]:
+                if source_str in answer_text:
+                    answer_text = answer_text.split(source_str)[0].strip()
+
             return {
                 "answer": answer_text,
                 "sources": retrieved_ids,
