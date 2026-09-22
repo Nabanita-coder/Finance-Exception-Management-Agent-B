@@ -15,6 +15,7 @@ import os
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
+from sqlalchemy import text
 from dbConnection.db import engine, get_session
 from services.finance_models import Base, FinancialRecord, Owner, ExceptionCase, SystemThreshold
 
@@ -99,9 +100,34 @@ DEFAULT_THRESHOLDS = [
 
 
 def init_thresholds_db():
-    """Ensures ai_thresholds table exists and seeds initial parameters if missing."""
+    """Ensures tables exist and columns are up to date."""
     try:
-        Base.metadata.create_all(bind=engine, tables=[SystemThreshold.__table__])
+        Base.metadata.create_all(bind=engine)
+        
+        # Check and dynamically add missing columns to owners table if created with old schema
+        with engine.connect() as conn:
+            try:
+                conn.execute(
+                    text("ALTER TABLE owners ADD COLUMN department VARCHAR(100) DEFAULT 'General Finance'")
+                )
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(
+                    text("ALTER TABLE owners ADD COLUMN is_active INT DEFAULT 1")
+                )
+                conn.commit()
+            except Exception:
+                pass
+            try:
+                conn.execute(
+                    text("ALTER TABLE owners ADD COLUMN max_approval_limit FLOAT DEFAULT 1000000.0")
+                )
+                conn.commit()
+            except Exception:
+                pass
+
         session = get_session()
         try:
             for item in DEFAULT_THRESHOLDS:
